@@ -11,6 +11,8 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     display_name TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     is_admin BOOLEAN DEFAULT false,
+    is_verified BOOLEAN DEFAULT false,
+    verification_token TEXT,
     games_played INTEGER DEFAULT 0,
     games_won INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL

@@ -64,6 +64,17 @@ app.post('/api/forgot', async (req, res) => {
   }
 });
 
+// E-POSTA DOĞRULAMA (YENİ)
+app.post('/api/verify-email', async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    await authManager.verifyEmail(email, code);
+    res.json({ success: true, message: 'E-postanız başarıyla doğrulandı.' });
+  } catch (e: any) {
+    res.status(400).json({ success: false, message: e.message });
+  }
+});
+
 // PROFİL
 app.get('/api/profile/:userId', async (req, res) => {
   try {

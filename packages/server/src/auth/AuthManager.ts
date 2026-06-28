@@ -14,7 +14,7 @@ export interface UserProfile {
 export class AuthManager {
 
   // KAYIT: Yeni hesap oluştur
-  async register(username: string, password: string, email: string): Promise<{ token: string; userId: string; isAdmin: boolean }> {
+  async register(username: string, password: string, email: string): Promise<{ success: boolean; message: string; userId?: string }> {
     const trimmed = username.trim();
     if (!trimmed || trimmed.length < 2) throw new Error('Kullanıcı adı en az 2 karakter olmalı!');
     
@@ -41,8 +41,11 @@ export class AuthManager {
     const isFirstUser = count === 0;
 
     const passwordHash = await bcrypt.hash(password, 10);
+    
+    // 6 HANELİ DOĞRULAMA KODU OLUŞTUR
+    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
 
-    // Profile ekle
+    // Profile ekle (is_verified: false ve verification_token ile)
     const { data: newUser, error: insertError } = await supabase
         .from('profiles')
         .insert({
@@ -50,7 +53,9 @@ export class AuthManager {
             username: trimmed.toLowerCase(),
             display_name: trimmed,
             password_hash: passwordHash,
-            is_admin: isFirstUser
+            is_admin: isFirstUser,
+            is_verified: false,
+            verification_token: verificationCode
         })
         .select('id')
         .single();
@@ -62,15 +67,44 @@ export class AuthManager {
 
     const userId = newUser.id;
 
-    // Oturum oluştur
-    const token = uuidv4();
-    await supabase.from('sessions').insert({
-        token,
-        user_id: userId
-    });
+    // Brevo ile E-posta Gönderme (6 Haneli Kod)
+    const brevoApiKey = process.env.BREVO_API_KEY;
+    
+    if (brevoApiKey) {
+        try {
+            await fetch('https://api.brevo.com/v3/smtp/email', {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'api-key': brevoApiKey
+                },
+                body: JSON.stringify({
+                    sender: { name: "CUMOR", email: "gorkemdal.72@gmail.com" },
+                    to: [{ email: email.toLowerCase(), name: trimmed }],
+                    subject: "CUMOR - E-Posta Doğrulama Kodunuz",
+                    htmlContent: `
+                        <div style="font-family: sans-serif; text-align: center; padding: 20px;">
+                            <h2>CUMOR'a Hoş Geldin, ${trimmed}!</h2>
+                            <p>Kayıt işlemini tamamlamak için aşağıdaki 6 haneli doğrulama kodunu kullanabilirsin:</p>
+                            <div style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #3b82f6; padding: 20px; background: #f0f8ff; display: inline-block; border-radius: 8px; margin: 15px 0;">
+                                ${verificationCode}
+                            </div>
+                            <p style="margin-top: 20px; font-size: 12px; color: #666;">Eğer bu kaydı sen yapmadıysan bu e-postayı dikkate alma.</p>
+                        </div>
+                    `
+                })
+            });
+            console.log(`📧 Doğrulama kodu maili gönderildi: ${email}`);
+        } catch (err) {
+            console.error("Brevo Mail Gönderme Hatası:", err);
+        }
+    } else {
+        console.warn("⚠️ BREVO_API_KEY bulunamadı. E-posta gönderilemedi.");
+    }
 
     console.log(`✅ Kayıt: ${trimmed} (admin: ${isFirstUser})`);
-    return { token, userId, isAdmin: isFirstUser };
+    return { success: true, message: "Kayıt başarılı! Lütfen e-postanıza gönderilen 6 haneli doğrulama kodunu girin.", userId };
   }
 
   // GİRİŞ: Mevcut hesapla oturum aç
@@ -85,6 +119,11 @@ export class AuthManager {
 
     if (error || !userDoc) throw new Error('Kullanıcı bulunamadı!');
 
+    // E-posta doğrulama kontrolü
+    if (userDoc.is_verified === false) {
+        throw new Error('E-posta adresiniz henüz doğrulanmamış. Lütfen kayıt olurken gönderilen doğrulama kodunu girin.');
+    }
+
     const isValid = await bcrypt.compare(password, userDoc.password_hash);
     if (!isValid) throw new Error('Yanlış şifre!');
 
@@ -97,6 +136,41 @@ export class AuthManager {
 
     console.log(`✅ Giriş: ${trimmed}`);
     return { token, userId: userDoc.id, isAdmin: userDoc.is_admin || false };
+  }
+
+  // E-POSTA DOĞRULAMA (6 HANELİ KOD)
+  async verifyEmail(email: string, code: string): Promise<boolean> {
+      if (!email || !code) throw new Error("E-posta ve doğrulama kodu gereklidir.");
+
+      const trimmedEmail = email.trim().toLowerCase();
+
+      const { data: user, error } = await supabase
+          .from('profiles')
+          .select('id, verification_token')
+          .eq('email', trimmedEmail)
+          .single();
+
+      if (error || !user) {
+          throw new Error("Kullanıcı bulunamadı.");
+      }
+
+      if (user.verification_token !== code.trim()) {
+          throw new Error("Hatalı doğrulama kodu!");
+      }
+
+      // Kullanıcıyı doğrulanmış olarak işaretle ve token'ı temizle
+      const { error: updateError } = await supabase
+          .from('profiles')
+          .update({
+              is_verified: true,
+              verification_token: null
+          })
+          .eq('id', user.id);
+
+      if (updateError) throw new Error("Doğrulama işlemi başarısız oldu.");
+
+      console.log(`✅ E-posta doğrulandı: ${user.id}`);
+      return true;
   }
   
   // ŞİFREMİ UNUTTUM
