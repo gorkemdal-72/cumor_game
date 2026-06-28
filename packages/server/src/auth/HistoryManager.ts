@@ -1,5 +1,4 @@
-import { db } from '../firebase.js';
-import { v4 as uuidv4 } from 'uuid';
+import { supabase } from '../supabase.js';
 
 export interface GameHistoryPlayer {
     userId: string;
@@ -19,7 +18,6 @@ export interface GameHistoryEntry {
 }
 
 export class HistoryManager {
-    private historyCol = db.collection('gameHistory');
 
     // OYUN SONUCU KAYDET
     async saveGameResult(
@@ -28,36 +26,83 @@ export class HistoryManager {
         winnerId: string,
         winnerName: string
     ): Promise<void> {
-        const id = uuidv4();
-        await this.historyCol.doc(id).set({
-            id,
-            roomName,
-            date: Date.now(),
-            players,
-            winnerId,
-            winnerName
-        });
+        
+        // Önce game_history tablosuna oyunu ekle
+        const { data: game, error } = await supabase.from('game_history').insert({
+            room_name: roomName,
+            winner_id: winnerId,
+            winner_name: winnerName
+        }).select('id').single();
+
+        if (error || !game) {
+            console.error("Supabase Game History Save Error:", error);
+            return;
+        }
+
+        // Sonra game_history_players tablosuna oyuncuları ekle
+        const playersData = players.map(p => ({
+            game_id: game.id,
+            user_id: p.userId,
+            username: p.username,
+            color: p.color,
+            vp: p.vp,
+            is_winner: p.isWinner
+        }));
+
+        await supabase.from('game_history_players').insert(playersData);
+
         console.log(`📜 Oyun geçmişi kaydedildi: ${winnerName} kazandı!`);
     }
 
     // KULLANICININ OYUN GEÇMİŞİ (son 20)
     async getUserHistory(userId: string): Promise<GameHistoryEntry[]> {
-        // Firestore'da array-contains ile oyuncunun userId'sini arıyoruz
-        // Ama Firestore nested array query desteklemez, bu yüzden farklı yaklaşım:
-        // Tüm geçmişi çekip filtreliyoruz (küçük ölçekli oyun için OK)
-        const snapshot = await this.historyCol
-            .orderBy('date', 'desc')
-            .limit(100)
-            .get();
+        // Hangi oyunlarda oynadığını bul
+        const { data: userGames } = await supabase
+            .from('game_history_players')
+            .select('game_id')
+            .eq('user_id', userId)
+            .order('id', { ascending: false })
+            .limit(20);
 
-        const results: GameHistoryEntry[] = [];
-        for (const doc of snapshot.docs) {
-            const data = doc.data() as GameHistoryEntry;
-            if (data.players.some(p => p.userId === userId)) {
-                results.push(data);
-                if (results.length >= 20) break;
-            }
-        }
-        return results;
+        if (!userGames || userGames.length === 0) return [];
+
+        const gameIds = userGames.map(ug => ug.game_id);
+
+        // Bu oyunların detaylarını ve tüm oyuncularını çek
+        const { data: gamesData } = await supabase
+            .from('game_history')
+            .select(`
+                id,
+                room_name,
+                winner_id,
+                winner_name,
+                date,
+                game_history_players (
+                    user_id,
+                    username,
+                    color,
+                    vp,
+                    is_winner
+                )
+            `)
+            .in('id', gameIds)
+            .order('date', { ascending: false });
+
+        if (!gamesData) return [];
+
+        return gamesData.map((g: any) => ({
+            id: g.id,
+            roomName: g.room_name,
+            winnerId: g.winner_id,
+            winnerName: g.winner_name,
+            date: new Date(g.date).getTime(),
+            players: g.game_history_players.map((p: any) => ({
+                userId: p.user_id,
+                username: p.username,
+                color: p.color,
+                vp: p.vp,
+                isWinner: p.is_winner
+            }))
+        }));
     }
 }

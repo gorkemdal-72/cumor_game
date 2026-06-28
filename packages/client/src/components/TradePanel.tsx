@@ -16,7 +16,7 @@ const RESOURCE_NAMES: Record<ResourceType, string> = {
 const RESOURCE_ICONS: Record<ResourceType, string> = {
   [ResourceType.LUMBER]: '🌲',
   [ResourceType.CONCRETE]: '🧱',
-  [ResourceType.TEXTILE]: '🧵',
+  [ResourceType.TEXTILE]: '🐑',
   [ResourceType.FOOD]: '🌾',
   [ResourceType.DIAMOND]: '💎',
   [ResourceType.GOLD]: '💰'

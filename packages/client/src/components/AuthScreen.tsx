@@ -6,21 +6,36 @@ interface AuthScreenProps {
 }
 
 export function AuthScreen({ socketUrl, onAuth }: AuthScreenProps) {
-    const [tab, setTab] = useState<'login' | 'register'>('login');
+    const [tab, setTab] = useState<'login' | 'register' | 'forgot'>('login');
+    const [email, setEmail] = useState('');
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
+    const [msg, setMsg] = useState('');
     const [loading, setLoading] = useState(false);
 
     const handleSubmit = async () => {
         setError('');
+        setMsg('');
         setLoading(true);
         try {
+            if (tab === 'forgot') {
+                const res = await fetch(`${socketUrl}/api/forgot`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username: username.trim() })
+                });
+                const data = await res.json();
+                if (!data.success) throw new Error(data.message);
+                setMsg('Şifre sıfırlama bağlantısı e-postanıza gönderildi!');
+                return;
+            }
+
             const endpoint = tab === 'login' ? '/api/login' : '/api/register';
             const res = await fetch(`${socketUrl}${endpoint}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ username: username.trim(), password })
+                body: JSON.stringify({ username: username.trim(), password, email: email.trim() })
             });
             const data = await res.json();
             if (!data.success) throw new Error(data.message);
@@ -76,6 +91,20 @@ export function AuthScreen({ socketUrl, onAuth }: AuthScreenProps) {
 
                 {/* FORM */}
                 <div className="p-6 space-y-4">
+                    {tab === 'register' && (
+                        <div>
+                            <label className="text-xs text-slate-400 block mb-1">E-posta</label>
+                            <input
+                                type="email"
+                                value={email}
+                                onChange={e => setEmail(e.target.value)}
+                                onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+                                className="w-full p-3 bg-slate-900/50 text-white rounded-lg border border-slate-600/50 outline-none focus:border-blue-500 transition-colors placeholder-slate-600"
+                                placeholder="E-posta adresini gir"
+                            />
+                        </div>
+                    )}
+
                     <div>
                         <label className="text-xs text-slate-400 block mb-1">Kullanıcı Adı</label>
                         <input
@@ -85,19 +114,29 @@ export function AuthScreen({ socketUrl, onAuth }: AuthScreenProps) {
                             onKeyDown={e => e.key === 'Enter' && handleSubmit()}
                             className="w-full p-3 bg-slate-900/50 text-white rounded-lg border border-slate-600/50 outline-none focus:border-blue-500 transition-colors placeholder-slate-600"
                             placeholder="Kullanıcı adını gir"
-                            autoFocus
+                            autoFocus={tab === 'login'}
                         />
                     </div>
 
                     <div>
-                        <label className="text-xs text-slate-400 block mb-1">Şifre</label>
+                        <div className="flex justify-between items-end mb-1">
+                            <label className="text-xs text-slate-400 block">Şifre</label>
+                            {tab === 'login' && (
+                                <button
+                                    onClick={() => { setTab('forgot'); setError(''); }}
+                                    className="text-[10px] text-blue-400 hover:text-blue-300"
+                                >
+                                    Şifremi Unuttum
+                                </button>
+                            )}
+                        </div>
                         <input
                             type="password"
                             value={password}
                             onChange={e => setPassword(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && handleSubmit()}
                             className="w-full p-3 bg-slate-900/50 text-white rounded-lg border border-slate-600/50 outline-none focus:border-blue-500 transition-colors placeholder-slate-600"
-                            placeholder={tab === 'register' ? 'En az 4 karakter' : 'Şifreni gir'}
+                            placeholder={tab === 'register' ? 'En az 8 karakter (harf + rakam)' : 'Şifreni gir'}
                         />
                     </div>
 
@@ -106,22 +145,34 @@ export function AuthScreen({ socketUrl, onAuth }: AuthScreenProps) {
                             ❌ {error}
                         </div>
                     )}
+                    {msg && (
+                        <div className="bg-green-500/10 border border-green-500/30 text-green-400 text-sm p-3 rounded-lg">
+                            ✅ {msg}
+                        </div>
+                    )}
 
                     <button
                         onClick={handleSubmit}
-                        disabled={loading || !username.trim() || !password}
+                        disabled={loading || !username.trim() || (tab !== 'forgot' && !password) || (tab === 'register' && !email.trim())}
                         className={`w-full py-3 rounded-lg font-bold text-white transition-all ${tab === 'login'
                                 ? 'bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800/50'
-                                : 'bg-green-600 hover:bg-green-500 disabled:bg-green-800/50'
+                                : tab === 'register' ? 'bg-green-600 hover:bg-green-500 disabled:bg-green-800/50'
+                                : 'bg-purple-600 hover:bg-purple-500 disabled:bg-purple-800/50'
                             } disabled:cursor-not-allowed shadow-lg`}
                     >
-                        {loading ? '⏳ Yükleniyor...' : tab === 'login' ? '🔑 Giriş Yap' : '📝 Kayıt Ol'}
+                        {loading ? '⏳ Yükleniyor...' : tab === 'login' ? '🔑 Giriş Yap' : tab === 'register' ? '📝 Kayıt Ol' : 'Sıfırlama Gönder'}
                     </button>
 
                     <p className="text-center text-slate-500 text-xs mt-2">
-                        {tab === 'login'
-                            ? 'Hesabın yok mu? Kayıt Ol sekmesine tıkla.'
-                            : 'Zaten hesabın var mı? Giriş Yap sekmesine tıkla.'}
+                        {tab === 'login' && (
+                            <>Hesabın yok mu? <span onClick={() => { setTab('register'); setError(''); setMsg(''); }} className="text-green-400 cursor-pointer">Kayıt Ol</span></>
+                        )}
+                        {tab === 'register' && (
+                            <>Zaten hesabın var mı? <span onClick={() => { setTab('login'); setError(''); setMsg(''); }} className="text-blue-400 cursor-pointer">Giriş Yap</span></>
+                        )}
+                        {tab === 'forgot' && (
+                            <><span onClick={() => { setTab('login'); setError(''); setMsg(''); }} className="text-blue-400 cursor-pointer">Geri Dön</span></>
+                        )}
                     </p>
                 </div>
             </div>

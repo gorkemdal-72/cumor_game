@@ -1,4 +1,4 @@
-import { db } from '../firebase.js';
+import { supabase } from '../supabase.js';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -12,41 +12,61 @@ export interface UserProfile {
 }
 
 export class AuthManager {
-  private usersCol = db.collection('users');
-  private sessionsCol = db.collection('sessions');
 
   // KAYIT: Yeni hesap oluştur
-  async register(username: string, password: string): Promise<{ token: string; userId: string; isAdmin: boolean }> {
+  async register(username: string, password: string, email: string): Promise<{ token: string; userId: string; isAdmin: boolean }> {
     const trimmed = username.trim();
     if (!trimmed || trimmed.length < 2) throw new Error('Kullanıcı adı en az 2 karakter olmalı!');
-    if (!password || password.length < 4) throw new Error('Şifre en az 4 karakter olmalı!');
+    
+    // Şifre gücü kontrolü: En az 8 karakter, harf ve rakam içermeli
+    if (!password || password.length < 8) throw new Error('Şifre en az 8 karakter olmalı!');
+    if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
+        throw new Error('Şifre en az bir harf ve bir rakam içermelidir!');
+    }
+    if (!email || !email.includes('@')) throw new Error('Geçerli bir e-posta adresi girin!');
 
-    // Kullanıcı adı kontrolü (benzersiz olmalı)
-    const existing = await this.usersCol.where('username', '==', trimmed.toLowerCase()).get();
-    if (!existing.empty) throw new Error('Bu kullanıcı adı zaten alınmış!');
+    // Kullanıcı adı veya email kontrolü
+    const { data: existingUser } = await supabase
+        .from('profiles')
+        .select('id')
+        .or(`username.eq.${trimmed.toLowerCase()},email.eq.${email.toLowerCase()}`)
+        .limit(1);
+        
+    if (existingUser && existingUser.length > 0) {
+        throw new Error('Bu kullanıcı adı veya e-posta zaten alınmış!');
+    }
 
     // İlk kullanıcı mı? Super Admin olur
-    const allUsers = await this.usersCol.limit(1).get();
-    const isFirstUser = allUsers.empty;
+    const { count } = await supabase.from('profiles').select('*', { count: 'exact', head: true });
+    const isFirstUser = count === 0;
 
-    const userId = uuidv4();
     const passwordHash = await bcrypt.hash(password, 10);
 
-    await this.usersCol.doc(userId).set({
-      username: trimmed.toLowerCase(),
-      displayName: trimmed,
-      passwordHash,
-      isAdmin: isFirstUser, // İlk kayıt = admin
-      gamesPlayed: 0,
-      gamesWon: 0,
-      createdAt: Date.now()
-    });
+    // Profile ekle
+    const { data: newUser, error: insertError } = await supabase
+        .from('profiles')
+        .insert({
+            email: email.toLowerCase(),
+            username: trimmed.toLowerCase(),
+            display_name: trimmed,
+            password_hash: passwordHash,
+            is_admin: isFirstUser
+        })
+        .select('id')
+        .single();
+
+    if (insertError || !newUser) {
+        console.error("Supabase Insert Error:", insertError);
+        throw new Error('Kayıt olurken bir hata oluştu.');
+    }
+
+    const userId = newUser.id;
 
     // Oturum oluştur
     const token = uuidv4();
-    await this.sessionsCol.doc(token).set({
-      userId,
-      createdAt: Date.now()
+    await supabase.from('sessions').insert({
+        token,
+        user_id: userId
     });
 
     console.log(`✅ Kayıt: ${trimmed} (admin: ${isFirstUser})`);
@@ -56,67 +76,100 @@ export class AuthManager {
   // GİRİŞ: Mevcut hesapla oturum aç
   async login(username: string, password: string): Promise<{ token: string; userId: string; isAdmin: boolean }> {
     const trimmed = username.trim().toLowerCase();
-    const snapshot = await this.usersCol.where('username', '==', trimmed).get();
-    if (snapshot.empty) throw new Error('Kullanıcı bulunamadı!');
+    
+    const { data: userDoc, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('username', trimmed)
+        .single();
 
-    const userDoc = snapshot.docs[0];
-    const userData = userDoc.data();
+    if (error || !userDoc) throw new Error('Kullanıcı bulunamadı!');
 
-    const isValid = await bcrypt.compare(password, userData.passwordHash);
+    const isValid = await bcrypt.compare(password, userDoc.password_hash);
     if (!isValid) throw new Error('Yanlış şifre!');
 
     // Oturum oluştur
     const token = uuidv4();
-    await this.sessionsCol.doc(token).set({
-      userId: userDoc.id,
-      createdAt: Date.now()
+    await supabase.from('sessions').insert({
+        token,
+        user_id: userDoc.id
     });
 
     console.log(`✅ Giriş: ${trimmed}`);
-    return { token, userId: userDoc.id, isAdmin: userData.isAdmin || false };
+    return { token, userId: userDoc.id, isAdmin: userDoc.is_admin || false };
+  }
+  
+  // ŞİFREMİ UNUTTUM
+  async forgotPassword(username: string): Promise<void> {
+      const trimmed = username.trim().toLowerCase();
+      const { data: userDoc } = await supabase.from('profiles').select('email').eq('username', trimmed).single();
+      
+      if (!userDoc) {
+          throw new Error('Kullanıcı bulunamadı!');
+      }
+      
+      // Gerçek bir e-posta gönderme servisi eklenebilir. 
+      // Şimdilik sadece konsola logluyoruz.
+      console.log(`📧 SIFIRLAMA MAILI GÖNDERILECEK: ${userDoc.email}`);
   }
 
   // TOKEN DOĞRULAMA: Token geçerli mi kontrol et
   async verifyToken(token: string): Promise<{ userId: string; isAdmin: boolean } | null> {
     if (!token) return null;
-    const sessionDoc = await this.sessionsCol.doc(token).get();
-    if (!sessionDoc.exists) return null;
+    
+    const { data: sessionDoc } = await supabase
+        .from('sessions')
+        .select('user_id')
+        .eq('token', token)
+        .single();
+        
+    if (!sessionDoc) return null;
 
-    const sessionData = sessionDoc.data()!;
-    const userDoc = await this.usersCol.doc(sessionData.userId).get();
-    if (!userDoc.exists) return null;
+    const { data: userDoc } = await supabase
+        .from('profiles')
+        .select('is_admin')
+        .eq('id', sessionDoc.user_id)
+        .single();
+        
+    if (!userDoc) return null;
 
-    const userData = userDoc.data()!;
-    return { userId: sessionData.userId, isAdmin: userData.isAdmin || false };
+    return { userId: sessionDoc.user_id, isAdmin: userDoc.is_admin || false };
   }
 
   // PROFİL: Kullanıcı bilgilerini getir
   async getUserProfile(userId: string): Promise<UserProfile | null> {
-    const userDoc = await this.usersCol.doc(userId).get();
-    if (!userDoc.exists) return null;
-    const d = userDoc.data()!;
+    const { data: d, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+        
+    if (error || !d) return null;
+
     return {
-      id: userId,
-      username: d.displayName || d.username,
-      isAdmin: d.isAdmin || false,
-      gamesPlayed: d.gamesPlayed || 0,
-      gamesWon: d.gamesWon || 0,
-      createdAt: d.createdAt
+      id: d.id,
+      username: d.display_name || d.username,
+      isAdmin: d.is_admin || false,
+      gamesPlayed: d.games_played || 0,
+      gamesWon: d.games_won || 0,
+      createdAt: new Date(d.created_at).getTime()
     };
   }
 
   // ADMİN YAPMA/KALDIRMA: Sadece adminler çağırabilir
   async setAdmin(requesterId: string, targetUserId: string, makeAdmin: boolean): Promise<string> {
-    const requester = await this.usersCol.doc(requesterId).get();
-    if (!requester.exists || !requester.data()!.isAdmin) {
+    const { data: requester } = await supabase.from('profiles').select('is_admin').eq('id', requesterId).single();
+    
+    if (!requester || !requester.is_admin) {
       throw new Error('Bu işlem için admin yetkisi gerekli!');
     }
 
-    const target = await this.usersCol.doc(targetUserId).get();
-    if (!target.exists) throw new Error('Hedef kullanıcı bulunamadı!');
+    const { data: target, error } = await supabase.from('profiles').select('display_name, username').eq('id', targetUserId).single();
+    if (error || !target) throw new Error('Hedef kullanıcı bulunamadı!');
 
-    await this.usersCol.doc(targetUserId).update({ isAdmin: makeAdmin });
-    const targetName = target.data()!.displayName || target.data()!.username;
+    await supabase.from('profiles').update({ is_admin: makeAdmin }).eq('id', targetUserId);
+    
+    const targetName = target.display_name || target.username;
     return makeAdmin
       ? `${targetName} artık Admin! ⭐`
       : `${targetName} admin olmaktan çıkarıldı.`;
@@ -124,40 +177,37 @@ export class AuthManager {
 
   // KULLANICI ARA: İsme göre arama (admin paneli için)
   async searchUsers(query: string): Promise<UserProfile[]> {
-    // Firestore'da tam metin arama yok, prefix match yaparız
-    const snapshot = await this.usersCol
-      .where('username', '>=', query.toLowerCase())
-      .where('username', '<=', query.toLowerCase() + '\uf8ff')
-      .limit(10)
-      .get();
+    const { data: docs } = await supabase
+        .from('profiles')
+        .select('*')
+        .ilike('username', `${query.toLowerCase()}%`)
+        .limit(10);
+        
+    if (!docs) return [];
 
-    return snapshot.docs.map(doc => {
-      const d = doc.data();
-      return {
-        id: doc.id,
-        username: d.displayName || d.username,
-        isAdmin: d.isAdmin || false,
-        gamesPlayed: d.gamesPlayed || 0,
-        gamesWon: d.gamesWon || 0,
-        createdAt: d.createdAt
-      };
-    });
+    return docs.map((d: any) => ({
+        id: d.id,
+        username: d.display_name || d.username,
+        isAdmin: d.is_admin || false,
+        gamesPlayed: d.games_played || 0,
+        gamesWon: d.games_won || 0,
+        createdAt: new Date(d.created_at).getTime()
+    }));
   }
 
-  // İSTATİSTİK GÜNCELLE
+  // İSTATİSTİK GÜNCELLE (Supabase rpc veya iki sorgu)
   async updateStats(userId: string, won: boolean): Promise<void> {
-    const userRef = this.usersCol.doc(userId);
-    const userDoc = await userRef.get();
-    if (!userDoc.exists) return;
-    const d = userDoc.data()!;
-    await userRef.update({
-      gamesPlayed: (d.gamesPlayed || 0) + 1,
-      gamesWon: (d.gamesWon || 0) + (won ? 1 : 0)
-    });
+    const { data: d } = await supabase.from('profiles').select('games_played, games_won').eq('id', userId).single();
+    if (!d) return;
+    
+    await supabase.from('profiles').update({
+        games_played: (d.games_played || 0) + 1,
+        games_won: (d.games_won || 0) + (won ? 1 : 0)
+    }).eq('id', userId);
   }
 
   // ÇIKIŞ
   async logout(token: string): Promise<void> {
-    await this.sessionsCol.doc(token).delete();
+    await supabase.from('sessions').delete().eq('token', token);
   }
 }

@@ -9,10 +9,10 @@
   },
   "dependencies": {
     "@cumor/shared": "*",
+    "@supabase/supabase-js": "^2.108.2",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "firebase-admin": "^13.6.1",
     "socket.io": "^4.7.2",
     "uuid": "^13.0.0"
   },

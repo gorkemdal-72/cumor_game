@@ -97,7 +97,8 @@ export interface GameState {
   longestRoadPlayerId: string | null;   // En Uzun Yol sahibi (+2 VP)
   largestArmyPlayerId: string | null;   // En Güçlü Ordu sahibi (+2 VP)
   activeCartelPlayerId: string | null;  // Kartel aktif mi? Kimde?
-  startRolls: { playerId: string, roll: number | null }[]; // Başlangıç zarları
+  startRolls: { playerId: string, rolls: number[] }[]; // Başlangıç zarları
+  hasRolled?: boolean;                  // Zar atıldı mı? (Tüm clientlara gitmesi için)
 
   // YENİ: Gelişim Kartı Özel Fazları
   freeRoadsRemaining: number;           // Mühendis kartı: Kalan ücretsiz yol hakkı

@@ -127,6 +127,7 @@ function App() {
       setFreeRoadsRemaining((gameState as any).freeRoadsRemaining || 0);
       setTraderPicksRemaining((gameState as any).traderPicksRemaining || 0);
       setDevCardDeckCount((gameState as any).devCardDeckCount || 0);
+      if (gameState.hasRolled !== undefined) setHasRolled(gameState.hasRolled);
     });
     socket.on('dice_result', (data: { die1: number, die2: number, total: number }) => {
       setHasRolled(true);
@@ -869,7 +870,7 @@ function App() {
                               className="bg-slate-600 hover:bg-green-600 text-white px-1.5 py-1 rounded text-[10px] transition-colors"
                               title={`${res} +${adminResourceAmount} ver`}
                             >
-                              {res === ResourceType.LUMBER ? '🌲' : res === ResourceType.CONCRETE ? '🧱' : res === ResourceType.TEXTILE ? '🐑' : res === ResourceType.FOOD ? '🌾' : res === ResourceType.DIAMOND ? '💎' : '🪙'}
+                              {res === ResourceType.LUMBER ? '🌲' : res === ResourceType.CONCRETE ? '🧱' : res === ResourceType.TEXTILE ? '🐑' : res === ResourceType.FOOD ? '🌾' : res === ResourceType.DIAMOND ? '💎' : '💰'}
                               +{adminResourceAmount}
                             </button>
                             <button

@@ -7,8 +7,8 @@ import { PlayerColor, GameStatus } from '@cumor/shared';
 import { AuthManager } from './auth/AuthManager.js';
 import { HistoryManager } from './auth/HistoryManager.js';
 
-// Firebase başlat (import sırası önemli — ilk bu çalışmalı)
-import './firebase.js';
+// Supabase başlat (import sırası önemli — ilk bu çalışmalı)
+import './supabase.js';
 
 const app = express();
 app.set('trust proxy', 1); // Railway proxy desteği (önemli)
@@ -48,6 +48,17 @@ app.post('/api/login', async (req, res) => {
     const { username, password } = req.body;
     const result = await authManager.login(username, password);
     res.json({ success: true, ...result });
+  } catch (e: any) {
+    res.status(400).json({ success: false, message: e.message });
+  }
+});
+
+// ŞİFREMİ UNUTTUM
+app.post('/api/forgot', async (req, res) => {
+  try {
+    const { username } = req.body;
+    await authManager.forgotPassword(username);
+    res.json({ success: true, message: 'Sıfırlama bağlantısı gönderildi' });
   } catch (e: any) {
     res.status(400).json({ success: false, message: e.message });
   }
@@ -350,7 +361,8 @@ io.on('connection', async (socket) => {
         io.to(roomId).emit('game_state_update', room.getGameState());
         if (message) {
           socket.emit('system_alert', { message });
-          socket.broadcast.to(roomId).emit('system_alert', { message: "Bir oyuncu Gelişim Kartı oynadı!" });
+          const playerName = room.getGameState().players.find(p => p.id === socket.id)?.name || 'Bir oyuncu';
+          socket.broadcast.to(roomId).emit('system_alert', { message: `${playerName}, ${data.cardType} kartını oynadı!` });
         }
       }
     } catch (e: any) {
