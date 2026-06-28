@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     email TEXT UNIQUE NOT NULL,
     username TEXT UNIQUE NOT NULL,
     display_name TEXT NOT NULL,
+    password_hash TEXT NOT NULL,
     is_admin BOOLEAN DEFAULT false,
     games_played INTEGER DEFAULT 0,
     games_won INTEGER DEFAULT 0,
