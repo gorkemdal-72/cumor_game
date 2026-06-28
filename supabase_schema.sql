@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     verification_token TEXT,
     games_played INTEGER DEFAULT 0,
     games_won INTEGER DEFAULT 0,
+    total_vp INTEGER DEFAULT 0,
+    total_playtime_minutes INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
@@ -36,6 +38,7 @@ CREATE TABLE IF NOT EXISTS public.game_history (
     room_name TEXT NOT NULL,
     winner_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     winner_name TEXT NOT NULL,
+    duration_minutes INTEGER DEFAULT 0,
     date TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 

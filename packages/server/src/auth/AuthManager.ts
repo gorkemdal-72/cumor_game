@@ -8,6 +8,8 @@ export interface UserProfile {
   isAdmin: boolean;
   gamesPlayed: number;
   gamesWon: number;
+  totalVP: number;
+  totalPlaytimeMinutes: number;
   createdAt: number;
 }
 
@@ -226,6 +228,8 @@ export class AuthManager {
       isAdmin: d.is_admin || false,
       gamesPlayed: d.games_played || 0,
       gamesWon: d.games_won || 0,
+      totalVP: d.total_vp || 0,
+      totalPlaytimeMinutes: d.total_playtime_minutes || 0,
       createdAt: new Date(d.created_at).getTime()
     };
   }
@@ -265,18 +269,22 @@ export class AuthManager {
         isAdmin: d.is_admin || false,
         gamesPlayed: d.games_played || 0,
         gamesWon: d.games_won || 0,
+        totalVP: d.total_vp || 0,
+        totalPlaytimeMinutes: d.total_playtime_minutes || 0,
         createdAt: new Date(d.created_at).getTime()
     }));
   }
 
   // İSTATİSTİK GÜNCELLE (Supabase rpc veya iki sorgu)
-  async updateStats(userId: string, won: boolean): Promise<void> {
-    const { data: d } = await supabase.from('profiles').select('games_played, games_won').eq('id', userId).single();
+  async updateStats(userId: string, won: boolean, vp: number, playtimeMinutes: number): Promise<void> {
+    const { data: d } = await supabase.from('profiles').select('games_played, games_won, total_vp, total_playtime_minutes').eq('id', userId).single();
     if (!d) return;
     
     await supabase.from('profiles').update({
         games_played: (d.games_played || 0) + 1,
-        games_won: (d.games_won || 0) + (won ? 1 : 0)
+        games_won: (d.games_won || 0) + (won ? 1 : 0),
+        total_vp: (d.total_vp || 0) + vp,
+        total_playtime_minutes: (d.total_playtime_minutes || 0) + playtimeMinutes
     }).eq('id', userId);
   }
 

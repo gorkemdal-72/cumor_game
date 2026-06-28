@@ -430,10 +430,48 @@ io.on('connection', async (socket) => {
     } catch (e: any) { socket.emit('error_message', { message: e.message }); }
   });
 
-  socket.on('end_turn', () => {
+  socket.on('end_turn', async () => {
     try {
       const room = rooms.get(playerRoomMap.get(socket.id)!);
-      if (room) { room.endTurn(socket.id); io.to(room.getRoomInfo().id).emit('game_state_update', room.getGameState()); }
+      if (room) { 
+        room.endTurn(socket.id); 
+        const gameState = room.getGameState();
+        io.to(room.getRoomInfo().id).emit('game_state_update', gameState); 
+
+        // OYUN BİTİŞ KONTROLÜ VE VERİTABANINA KAYIT
+        if (gameState.status === GameStatus.FINISHED && !(room as any).isSaved) {
+            (room as any).isSaved = true; // Sadece bir kez kaydetmek için
+            const durationMinutes = Math.floor((Date.now() - room.gameStartTime) / 60000) || 1; // En az 1 dk
+            
+            const playersForHistory = gameState.players.map(p => ({
+                userId: p.userId || '',
+                username: p.name,
+                color: p.color,
+                vp: p.victoryPoints || 0,
+                isWinner: p.id === gameState.winnerId
+            }));
+            const winner = gameState.players.find(p => p.id === gameState.winnerId);
+            
+            if (winner) {
+                // Oyun geçmişini kaydet (sadece giriş yapmış hesaplar kaydedilir)
+                await historyManager.saveGameResult(
+                    room.name,
+                    playersForHistory.filter(p => p.userId),
+                    winner.userId || '',
+                    winner.name,
+                    durationMinutes
+                );
+
+                // Her oyuncunun profil istatistiklerini güncelle
+                for (const p of gameState.players) {
+                    if (p.userId) {
+                        const isWon = p.id === gameState.winnerId;
+                        await authManager.updateStats(p.userId, isWon, p.victoryPoints || 0, durationMinutes);
+                    }
+                }
+            }
+        }
+      }
     } catch (e: any) { socket.emit('error_message', { message: e.message }); }
   });
 

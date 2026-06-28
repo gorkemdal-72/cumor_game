@@ -77,6 +77,7 @@ export class RoomManager {
   public name: string;
   private devCardDeck: DevCardType[] = []; // Deste
   private hasRolled: boolean = false; // Zar atıldı mı?
+  public gameStartTime: number = 0; // YENİ: Oyun başlama zamanı
 
   constructor(id: string, name: string, password?: string) {
     this.name = name;
@@ -1388,6 +1389,7 @@ export class RoomManager {
         this.room.activePlayerId = this.room.players[0].id;
         this.room.turnSubPhase = 'settlement';
         this.room.startRolls = [];
+        this.gameStartTime = Date.now(); // YENİ: Süre sayacı başladı
 
         const winnerName = this.room.players[0].name;
         return `${msg}. Başlangıç sıralaması belirlendi! 1. ${winnerName}. Oyun Başlıyor!`;

@@ -23,6 +23,8 @@ interface UserProfile {
     isAdmin: boolean;
     gamesPlayed: number;
     gamesWon: number;
+    totalVP?: number;
+    totalPlaytimeMinutes?: number;
 }
 
 export function ProfilePanel({ socketUrl, userId, username, isAdmin, onLogout }: ProfilePanelProps) {
@@ -32,6 +34,7 @@ export function ProfilePanel({ socketUrl, userId, username, isAdmin, onLogout }:
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
     const [adminMsg, setAdminMsg] = useState('');
+    const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
 
     useEffect(() => {
         // Profil bilgisi
@@ -69,6 +72,18 @@ export function ProfilePanel({ socketUrl, userId, username, isAdmin, onLogout }:
     const winRate = profile && profile.gamesPlayed > 0
         ? Math.round((profile.gamesWon / profile.gamesPlayed) * 100)
         : 0;
+
+    const avgVP = profile && profile.gamesPlayed > 0 && profile.totalVP
+        ? (profile.totalVP / profile.gamesPlayed).toFixed(1)
+        : 0;
+
+    const formatPlaytime = (mins: number) => {
+        if (!mins) return '0 dk';
+        if (mins < 60) return `${mins} dk`;
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        return `${h}s ${m}dk`;
+    };
 
     return (
         <div className="bg-slate-800/80 rounded-xl border border-slate-700 p-4 w-full max-w-md">
@@ -122,41 +137,91 @@ export function ProfilePanel({ socketUrl, userId, username, isAdmin, onLogout }:
 
             {/* İSTATİSTİK */}
             {tab === 'profile' && profile && (
-                <div className="grid grid-cols-3 gap-2">
-                    <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                        <div className="text-2xl font-black text-white">{profile.gamesPlayed}</div>
-                        <div className="text-xs text-slate-400">Toplam Oyun</div>
+                <div className="space-y-2">
+                    <div className="grid grid-cols-3 gap-2">
+                        <div className="bg-slate-900/50 rounded-lg p-3 text-center border border-slate-700/50">
+                            <div className="text-2xl font-black text-white">{profile.gamesPlayed}</div>
+                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Toplam Oyun</div>
+                        </div>
+                        <div className="bg-slate-900/50 rounded-lg p-3 text-center border border-slate-700/50">
+                            <div className="text-2xl font-black text-green-400">{profile.gamesWon}</div>
+                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Kazanılan</div>
+                        </div>
+                        <div className="bg-slate-900/50 rounded-lg p-3 text-center border border-slate-700/50">
+                            <div className="text-2xl font-black text-amber-400">%{winRate}</div>
+                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Kazanma Oranı</div>
+                        </div>
                     </div>
-                    <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                        <div className="text-2xl font-black text-green-400">{profile.gamesWon}</div>
-                        <div className="text-xs text-slate-400">Kazanılan</div>
-                    </div>
-                    <div className="bg-slate-900/50 rounded-lg p-3 text-center">
-                        <div className="text-2xl font-black text-amber-400">%{winRate}</div>
-                        <div className="text-xs text-slate-400">Kazanma Oranı</div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <div className="bg-slate-900/50 rounded-lg p-3 text-center border border-slate-700/50">
+                            <div className="flex justify-center items-baseline gap-1">
+                                <span className="text-xl font-black text-blue-400">{profile.totalVP || 0}</span>
+                                <span className="text-xs text-slate-500 font-bold">({avgVP} ort)</span>
+                            </div>
+                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mt-1">Toplam Zafer Puanı</div>
+                        </div>
+                        <div className="bg-slate-900/50 rounded-lg p-3 text-center border border-slate-700/50">
+                            <div className="text-xl font-black text-purple-400">{formatPlaytime(profile.totalPlaytimeMinutes || 0)}</div>
+                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mt-1">Oyunda Geçen Süre</div>
+                        </div>
                     </div>
                 </div>
             )}
 
             {/* OYUN GEÇMİŞİ */}
             {tab === 'history' && (
-                <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
+                <div className="max-h-60 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
                     {history.length === 0 ? (
                         <p className="text-center text-slate-500 text-sm py-4">Henüz oyun geçmişi yok</p>
                     ) : (
                         history.map(g => {
                             const myResult = g.players.find(p => p.userId === userId);
+                            const isExpanded = expandedGameId === g.id;
+                            const duration = (g as any).durationMinutes || 0;
+                            
                             return (
-                                <div key={g.id} className={`text-xs p-2 rounded border ${myResult?.isWinner ? 'bg-green-500/10 border-green-500/30' : 'bg-slate-900/50 border-slate-700'}`}>
-                                    <div className="flex justify-between items-center">
-                                        <span className="font-bold text-white">{g.roomName}</span>
-                                        <span className={`px-1.5 py-0.5 rounded font-bold ${myResult?.isWinner ? 'bg-green-500/20 text-green-400' : 'text-slate-400'}`}>
-                                            {myResult?.isWinner ? '🏆 Kazandın' : `VP: ${myResult?.vp || 0}`}
-                                        </span>
+                                <div key={g.id} className="bg-slate-900/50 rounded-lg border border-slate-700/50 overflow-hidden transition-all duration-200">
+                                    <div 
+                                        className={`p-3 cursor-pointer hover:bg-slate-800/50 flex justify-between items-center ${isExpanded ? 'bg-slate-800/50' : ''}`}
+                                        onClick={() => setExpandedGameId(isExpanded ? null : g.id)}
+                                    >
+                                        <div>
+                                            <div className="font-bold text-white text-sm flex items-center gap-2">
+                                                {g.roomName}
+                                                {myResult?.isWinner && <span className="text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded">Kazandın 🏆</span>}
+                                            </div>
+                                            <div className="text-xs text-slate-400 mt-1 flex items-center gap-2">
+                                                <span>{new Date(g.date).toLocaleDateString('tr-TR')}</span>
+                                                <span>•</span>
+                                                <span className="flex items-center gap-1">⏱️ {duration > 0 ? `${duration} dk` : '? dk'}</span>
+                                            </div>
+                                        </div>
+                                        <div className="text-slate-500 transform transition-transform duration-200">
+                                            {isExpanded ? '▼' : '▶'}
+                                        </div>
                                     </div>
-                                    <div className="text-slate-500 mt-0.5">
-                                        {new Date(g.date).toLocaleDateString('tr-TR')} • Kazanan: {g.winnerName}
-                                    </div>
+                                    
+                                    {isExpanded && (
+                                        <div className="bg-slate-900/80 p-3 border-t border-slate-700/50">
+                                            <div className="text-[10px] uppercase text-slate-500 font-bold mb-2 tracking-wider">Oyuncular ve Skorlar</div>
+                                            <div className="space-y-1.5">
+                                                {g.players.sort((a,b) => b.vp - a.vp).map((p, idx) => (
+                                                    <div key={idx} className="flex items-center justify-between text-xs bg-slate-800/50 p-1.5 rounded">
+                                                        <div className="flex items-center gap-2">
+                                                            <div className="w-3 h-3 rounded-sm border border-black/20" style={{ backgroundColor: p.color }}></div>
+                                                            <span className={p.userId === userId ? 'text-blue-300 font-bold' : 'text-slate-300'}>
+                                                                {p.username}
+                                                            </span>
+                                                            {p.isWinner && <span className="text-amber-400 text-[10px]">👑</span>}
+                                                        </div>
+                                                        <div className="font-bold text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
+                                                            {p.vp} VP
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             );
                         })

@@ -12,6 +12,7 @@ export interface GameHistoryEntry {
     id: string;
     roomName: string;
     date: number;
+    durationMinutes: number;
     players: GameHistoryPlayer[];
     winnerId: string;
     winnerName: string;
@@ -24,14 +25,16 @@ export class HistoryManager {
         roomName: string,
         players: GameHistoryPlayer[],
         winnerId: string,
-        winnerName: string
+        winnerName: string,
+        durationMinutes: number
     ): Promise<void> {
         
         // Önce game_history tablosuna oyunu ekle
         const { data: game, error } = await supabase.from('game_history').insert({
             room_name: roomName,
             winner_id: winnerId,
-            winner_name: winnerName
+            winner_name: winnerName,
+            duration_minutes: durationMinutes
         }).select('id').single();
 
         if (error || !game) {
@@ -51,7 +54,7 @@ export class HistoryManager {
 
         await supabase.from('game_history_players').insert(playersData);
 
-        console.log(`📜 Oyun geçmişi kaydedildi: ${winnerName} kazandı!`);
+        console.log(`📜 Oyun geçmişi kaydedildi: ${winnerName} kazandı! (${durationMinutes} dk)`);
     }
 
     // KULLANICININ OYUN GEÇMİŞİ (son 20)
@@ -76,6 +79,7 @@ export class HistoryManager {
                 room_name,
                 winner_id,
                 winner_name,
+                duration_minutes,
                 date,
                 game_history_players (
                     user_id,
@@ -95,6 +99,7 @@ export class HistoryManager {
             roomName: g.room_name,
             winnerId: g.winner_id,
             winnerName: g.winner_name,
+            durationMinutes: g.duration_minutes || 0,
             date: new Date(g.date).getTime(),
             players: g.game_history_players.map((p: any) => ({
                 userId: p.user_id,
