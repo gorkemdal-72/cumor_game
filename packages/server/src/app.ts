@@ -34,8 +34,8 @@ app.get('/health', (req, res) => {
 // KAYIT
 app.post('/api/register', async (req, res) => {
   try {
-    const { username, password } = req.body;
-    const result = await authManager.register(username, password);
+    const { username, password, email } = req.body;
+    const result = await authManager.register(username, password, email);
     res.json({ success: true, ...result });
   } catch (e: any) {
     res.status(400).json({ success: false, message: e.message });
