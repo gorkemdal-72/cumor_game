@@ -409,10 +409,10 @@ export class RoomManager {
     // ETKİLERİ UYGULA (her kartın kendine özgü etkisi var)
     switch (cardType) {
       case DevCardType.MERCENARY:
-        // PARALI ASKER: Ordu sayısını artırır + Vergi Memurunu taşıma modunu açar
+        // MEMUR KARTI: Memur sayısını artırır + Vergi Memurunu taşıma modunu açar
         player.armySize++;
         (this.room.turnSubPhase as any) = 'robber';
-        return `Paralı Asker oynandı! Ordu: ${player.armySize} ⚔️ Vergi Memurunu taşı.`;
+        return `Memur kartı oynandı! Memur: ${player.armySize} 💼 Vergi Memurunu taşı.`;
 
       case DevCardType.SABOTAGE:
         // SABOTAJ: Rakip yol yıkma modunu açar
@@ -984,7 +984,7 @@ export class RoomManager {
 
   // Tüm oyuncuların VP'sini güncelle
   private updateAllVictoryPoints() {
-    // Önce En Uzun Yol ve En Güçlü Ordu sahiplerini belirle
+    // Önce En Uzun Yol ve Vergi Rekortmeni sahiplerini belirle
     this.updateLongestRoadHolder();
     this.updateLargestArmyHolder();
 
@@ -1018,7 +1018,7 @@ export class RoomManager {
       vp += 2;
     }
 
-    // 4. En Güçlü Ordu (+2)
+    // 4. Vergi Rekortmeni (+2)
     if (this.room.largestArmyPlayerId === playerId) {
       vp += 2;
     }
@@ -1172,7 +1172,7 @@ export class RoomManager {
     return 1 + maxBranch;
   }
 
-  // === EN GÜÇLÜ ORDU HESAPLAMA ===
+  // === VERGİ REKORTMENİ HESAPLAMA ===
   private updateLargestArmyHolder() {
     const MIN_ARMY = 3;
     let maxArmy = MIN_ARMY - 1;
@@ -1199,7 +1199,7 @@ export class RoomManager {
       }
     }
 
-    // Eğer mevcut sahip artık min orduya sahip değilse
+    // Eğer mevcut sahip artık min memura sahip değilse
     if (this.room.largestArmyPlayerId) {
       const currentHolder = this.room.players.find(p => p.id === this.room.largestArmyPlayerId);
       if (currentHolder && currentHolder.armySize < MIN_ARMY) {

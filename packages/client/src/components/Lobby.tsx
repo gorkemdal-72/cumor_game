@@ -167,7 +167,7 @@ export function Lobby({ rooms, onCreateRoom, onJoinRoom }: LobbyProps) {
               </ul>
               <p><strong className="text-white">🃏 Gelişim Kartları:</strong></p>
               <ul className="list-disc list-inside ml-2 space-y-1">
-                <li><span className="text-white">Vergi Memuru (⚔️):</span> Hırsızı taşı + ordu büyüt (3 = En Güçlü Ordu +2 VP)</li>
+                <li><span className="text-white">Vergi Memuru (💼):</span> Vergi Memurunu taşı + memur sayısını artır (3 = Vergi Rekortmeni +2 VP)</li>
                 <li><span className="text-white">Sabotaj (💣):</span> Rakip yol yık</li>
                 <li><span className="text-white">Kartel (🏢):</span> Tüm kaynak üretimi sana gelsin</li>
                 <li><span className="text-white">Sigorta (🛡️):</span> Sabotajdan otomatik koru</li>

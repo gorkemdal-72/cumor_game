@@ -365,7 +365,7 @@ function App() {
                   <span className="font-semibold truncate max-w-[60px]">{p.name}</span>
                   <span className="text-yellow-400 font-bold">{p.victoryPoints}</span>
                   {hasLongestRoad && <span title="En Uzun Yol (+2 VP)" className="text-[10px]">🛤️</span>}
-                  {hasLargestArmy && <span title="En Güçlü Ordu (+2 VP)" className="text-[10px]">⚔️</span>}
+                  {hasLargestArmy && <span title="Vergi Rekortmeni (+2 VP)" className="text-[10px]">💼</span>}
                   {isActive && <span className="text-[9px] text-yellow-300 animate-pulse">●</span>}
                   {/* Ban butonu - host görür, kendisi hariç */}
                   {myId === hostId && !isMe && (

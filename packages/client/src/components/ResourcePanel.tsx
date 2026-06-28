@@ -20,7 +20,7 @@ const RESOURCE_NAMES: Record<ResourceType, string> = {
 };
 
 const CARD_ICONS: Record<DevCardType, string> = {
-  [DevCardType.MERCENARY]: '⚔️',
+  [DevCardType.MERCENARY]: '💼',
   [DevCardType.SABOTAGE]: '💣',
   [DevCardType.CARTEL]: '🏢',
   [DevCardType.INSURANCE]: '🛡️',
@@ -31,7 +31,7 @@ const CARD_ICONS: Record<DevCardType, string> = {
 };
 
 const CARD_NAMES: Record<DevCardType, string> = {
-  [DevCardType.MERCENARY]: 'Asker',
+  [DevCardType.MERCENARY]: 'Memur',
   [DevCardType.SABOTAGE]: 'Sabotaj',
   [DevCardType.CARTEL]: 'Kartel',
   [DevCardType.INSURANCE]: 'Sigorta',
@@ -43,7 +43,7 @@ const CARD_NAMES: Record<DevCardType, string> = {
 
 // Kart açıklamaları (tooltip için)
 const CARD_TOOLTIPS: Record<DevCardType, string> = {
-  [DevCardType.MERCENARY]: 'Vergi Memurunu taşı + vergi adam olmak için 3 tane açman gerekiyor',
+  [DevCardType.MERCENARY]: 'Vergi Memurunu taşı + Vergi Rekortmeni olmak için 3 tane açman gerekiyor',
   [DevCardType.SABOTAGE]: 'Haritadaki bir rakip yolu yok et',
   [DevCardType.CARTEL]: 'Bir kaynağı tekelini. Rakipler sana öder',
   [DevCardType.INSURANCE]: 'Sonraki 7 zaranda kaynak kaybetmezsin',
@@ -68,8 +68,8 @@ export function DevCardContent({ devCards, onPlayCard, isMyTurn }: { devCards: R
         if (count === 0) return null;
 
         return (
-          <div key={type} className="flex flex-col items-center justify-between h-full min-w-[50px]">
-            <div className="flex flex-col items-center">
+          <div key={type} className="flex flex-col items-center justify-between h-full min-w-[50px] group relative">
+            <div className="flex flex-col items-center cursor-help">
               <div className="text-2xl mb-1">{CARD_ICONS[type]}</div>
               <div className="font-black text-white text-sm bg-purple-700 rounded-full w-5 h-5 flex items-center justify-center -mt-2 border border-purple-400">
                 {count}
@@ -86,6 +86,10 @@ export function DevCardContent({ devCards, onPlayCard, isMyTurn }: { devCards: R
                 KULLAN
               </button>
             )}
+            {/* KÜÇÜK BİLGİ TOOLTIP */}
+            <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-48 p-2 bg-slate-900 text-white text-xs rounded-lg opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50 text-center shadow-xl border border-purple-500/30">
+              {CARD_TOOLTIPS[type]}
+            </div>
           </div>
         );
       })}

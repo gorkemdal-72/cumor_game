@@ -95,7 +95,7 @@ export interface GameState {
   // CUMOR: Yeni Alanlar
   winnerId: string | null;              // Kazanan oyuncu
   longestRoadPlayerId: string | null;   // En Uzun Yol sahibi (+2 VP)
-  largestArmyPlayerId: string | null;   // En Güçlü Ordu sahibi (+2 VP)
+  largestArmyPlayerId: string | null;   // Vergi Rekortmeni sahibi (+2 VP)
   activeCartelPlayerId: string | null;  // Kartel aktif mi? Kimde?
   startRolls: { playerId: string, rolls: number[] }[]; // Başlangıç zarları
   hasRolled?: boolean;                  // Zar atıldı mı? (Tüm clientlara gitmesi için)
