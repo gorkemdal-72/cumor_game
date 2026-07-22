@@ -45,6 +45,11 @@ export interface Player {
   armySize: number;
   devCards: Record<DevCardType, number>;
   newDevCards: Record<DevCardType, number>; // Yeni alınanlar (bu tur kullanılamaz)
+  gameStats: {
+    sabotagesUsed: number;
+    robbedByTaxCollector: number;
+    tradesMade: number;
+  };
 }
 
 export enum PlayerColor {
@@ -142,14 +147,35 @@ export interface UserAccount {
   isAdmin: boolean;
   gamesPlayed: number;
   gamesWon: number;
+  totalVP: number;
+  totalPlaytimeMinutes: number;
   createdAt: number;
+  awardGaddar?: number;
+  awardSanssiz?: number;
+  awardBorsa?: number;
 }
 
 export interface GameHistoryEntry {
   id: string;
   roomName: string;
   date: number;
-  players: { userId: string; username: string; color: string; vp: number; isWinner: boolean }[];
+  players: { 
+    userId: string; 
+    username: string; 
+    color: string; 
+    vp: number; 
+    isWinner: boolean;
+    gameStats?: {
+      sabotagesUsed: number;
+      robbedByTaxCollector: number;
+      tradesMade: number;
+    };
+    awards?: {
+      gaddar: boolean;
+      sanssiz: boolean;
+      borsa: boolean;
+    };
+  }[];
   winnerId: string;
   winnerName: string;
 }

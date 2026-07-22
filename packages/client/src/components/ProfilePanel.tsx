@@ -12,7 +12,14 @@ interface GameHistoryEntry {
     id: string;
     roomName: string;
     date: number;
-    players: { userId: string; username: string; color: string; vp: number; isWinner: boolean }[];
+    players: { 
+        userId: string; 
+        username: string; 
+        color: string; 
+        vp: number; 
+        isWinner: boolean;
+        awards?: { gaddar: boolean; sanssiz: boolean; borsa: boolean; };
+    }[];
     winnerId: string;
     winnerName: string;
 }
@@ -25,6 +32,9 @@ interface UserProfile {
     gamesWon: number;
     totalVP?: number;
     totalPlaytimeMinutes?: number;
+    awardGaddar?: number;
+    awardSanssiz?: number;
+    awardBorsa?: number;
 }
 
 export function ProfilePanel({ socketUrl, userId, username, isAdmin, onLogout }: ProfilePanelProps) {
@@ -165,6 +175,24 @@ export function ProfilePanel({ socketUrl, userId, username, isAdmin, onLogout }:
                             <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mt-1">Oyunda Geçen Süre</div>
                         </div>
                     </div>
+                    {/* ÖDÜLLER */}
+                    <div className="bg-slate-900/50 rounded-lg p-3 border border-slate-700/50 mt-2">
+                        <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-2">Başarımlar</div>
+                        <div className="grid grid-cols-3 gap-2">
+                            <div className="text-center">
+                                <div className="text-xl font-black text-red-400">{profile.awardGaddar || 0}</div>
+                                <div className="text-[10px] text-slate-300">😈 En Gaddar</div>
+                            </div>
+                            <div className="text-center">
+                                <div className="text-xl font-black text-blue-400">{profile.awardSanssiz || 0}</div>
+                                <div className="text-[10px] text-slate-300">😭 En Şanssız</div>
+                            </div>
+                            <div className="text-center">
+                                <div className="text-xl font-black text-yellow-400">{profile.awardBorsa || 0}</div>
+                                <div className="text-[10px] text-slate-300">📈 Borsa Kurdu</div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             )}
 
@@ -214,8 +242,15 @@ export function ProfilePanel({ socketUrl, userId, username, isAdmin, onLogout }:
                                                             </span>
                                                             {p.isWinner && <span className="text-amber-400 text-[10px]">👑</span>}
                                                         </div>
-                                                        <div className="font-bold text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
-                                                            {p.vp} VP
+                                                        <div className="flex flex-col items-end">
+                                                            <div className="font-bold text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
+                                                                {p.vp} VP
+                                                            </div>
+                                                            <div className="flex gap-1 mt-1 justify-end w-full">
+                                                                {p.awards?.gaddar && <span title="En Gaddar" className="text-xs">😈</span>}
+                                                                {p.awards?.sanssiz && <span title="En Şanssız" className="text-xs">😭</span>}
+                                                                {p.awards?.borsa && <span title="Borsa Kurdu" className="text-xs">📈</span>}
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 ))}

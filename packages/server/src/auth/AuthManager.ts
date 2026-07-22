@@ -11,6 +11,9 @@ export interface UserProfile {
   totalVP: number;
   totalPlaytimeMinutes: number;
   createdAt: number;
+  awardGaddar?: number;
+  awardSanssiz?: number;
+  awardBorsa?: number;
 }
 
 export class AuthManager {
@@ -25,7 +28,11 @@ export class AuthManager {
     if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
         throw new Error('Şifre en az bir harf ve bir rakam içermelidir!');
     }
-    if (!email || !email.includes('@')) throw new Error('Geçerli bir e-posta adresi girin!');
+    // E-posta format kontrolü (düzgün regex ile)
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!email || !emailRegex.test(email.trim())) {
+        throw new Error('Geçerli bir e-posta adresi girin! (örn: kullanici@mail.com)');
+    }
 
     // Kullanıcı adı veya email kontrolü
     const { data: existingUser } = await supabase
@@ -56,8 +63,11 @@ export class AuthManager {
             display_name: trimmed,
             password_hash: passwordHash,
             is_admin: isFirstUser,
-            is_verified: false,
-            verification_token: verificationCode
+            // E-posta doğrulamasını iptal ettik, ileride açmak için alttaki satırları açıp üsttekileri silin:
+            // is_verified: false,
+            // verification_token: verificationCode
+            is_verified: true,
+            verification_token: null
         })
         .select('id')
         .single();
@@ -106,25 +116,29 @@ export class AuthManager {
     }
 
     console.log(`✅ Kayıt: ${trimmed} (admin: ${isFirstUser})`);
-    return { success: true, message: "Kayıt başarılı! Lütfen e-postanıza gönderilen 6 haneli doğrulama kodunu girin.", userId };
+    // E-posta doğrulamasını iptal ettik, ileride açmak için alttaki satırı açıp üsttekini silin:
+    // return { success: true, message: "Kayıt başarılı! Lütfen e-postanıza gönderilen 6 haneli doğrulama kodunu girin.", userId };
+    return { success: true, message: "Kayıt başarılı! Şimdi giriş yapabilirsiniz.", userId };
   }
 
-  // GİRİŞ: Mevcut hesapla oturum aç
+  // GİRİŞ: Kullanıcı adı VEYA e-posta ile oturum aç
   async login(username: string, password: string): Promise<{ token: string; userId: string; isAdmin: boolean }> {
     const trimmed = username.trim().toLowerCase();
     
+    // '@' içeriyorsa e-posta ile, içermiyorsa kullanıcı adı ile ara
+    const isEmail = trimmed.includes('@');
     const { data: userDoc, error } = await supabase
         .from('profiles')
         .select('*')
-        .eq('username', trimmed)
+        .eq(isEmail ? 'email' : 'username', trimmed)
         .single();
 
-    if (error || !userDoc) throw new Error('Kullanıcı bulunamadı!');
+    if (error || !userDoc) throw new Error(isEmail ? 'Bu e-posta ile kayıtlı hesap bulunamadı!' : 'Kullanıcı bulunamadı!');
 
-    // E-posta doğrulama kontrolü
-    if (userDoc.is_verified === false) {
-        throw new Error('E-posta adresiniz henüz doğrulanmamış. Lütfen kayıt olurken gönderilen doğrulama kodunu girin.');
-    }
+    // E-posta doğrulama kontrolü iptal edildi
+    // if (userDoc.is_verified === false) {
+    //     throw new Error('E-posta adresiniz henüz doğrulanmamış. Lütfen kayıt olurken gönderilen doğrulama kodunu girin.');
+    // }
 
     const isValid = await bcrypt.compare(password, userDoc.password_hash);
     if (!isValid) throw new Error('Yanlış şifre!');
@@ -230,7 +244,10 @@ export class AuthManager {
       gamesWon: d.games_won || 0,
       totalVP: d.total_vp || 0,
       totalPlaytimeMinutes: d.total_playtime_minutes || 0,
-      createdAt: new Date(d.created_at).getTime()
+      createdAt: new Date(d.created_at).getTime(),
+      awardGaddar: d.award_gaddar || 0,
+      awardSanssiz: d.award_sanssiz || 0,
+      awardBorsa: d.award_borsa || 0
     };
   }
 
@@ -276,16 +293,32 @@ export class AuthManager {
   }
 
   // İSTATİSTİK GÜNCELLE (Supabase rpc veya iki sorgu)
-  async updateStats(userId: string, won: boolean, vp: number, playtimeMinutes: number): Promise<void> {
-    const { data: d } = await supabase.from('profiles').select('games_played, games_won, total_vp, total_playtime_minutes').eq('id', userId).single();
+  async updateStats(userId: string, won: boolean, vp: number, playtimeMinutes: number, awards?: {gaddar: boolean, sanssiz: boolean, borsa: boolean}): Promise<void> {
+    if (!userId || userId.trim() === '') {
+      console.warn("⚠️ updateStats: userId boş, güncelleme yapılmadı.");
+      return;
+    }
+
+    const { data: d, error: selectError } = await supabase.from('profiles').select('games_played, games_won, total_vp, total_playtime_minutes, award_gaddar, award_sanssiz, award_borsa').eq('id', userId).single();
+    if (selectError) {
+      console.error(`❌ updateStats SELECT hatası (${userId}):`, selectError.message);
+      return;
+    }
     if (!d) return;
     
-    await supabase.from('profiles').update({
+    const { error: updateError } = await supabase.from('profiles').update({
         games_played: (d.games_played || 0) + 1,
         games_won: (d.games_won || 0) + (won ? 1 : 0),
         total_vp: (d.total_vp || 0) + vp,
-        total_playtime_minutes: (d.total_playtime_minutes || 0) + playtimeMinutes
+        total_playtime_minutes: (d.total_playtime_minutes || 0) + playtimeMinutes,
+        award_gaddar: (d.award_gaddar || 0) + (awards?.gaddar ? 1 : 0),
+        award_sanssiz: (d.award_sanssiz || 0) + (awards?.sanssiz ? 1 : 0),
+        award_borsa: (d.award_borsa || 0) + (awards?.borsa ? 1 : 0)
     }).eq('id', userId);
+
+    if (updateError) {
+      console.error(`❌ updateStats UPDATE hatası (${userId}):`, updateError.message);
+    }
   }
 
   // ÇIKIŞ

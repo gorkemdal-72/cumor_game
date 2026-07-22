@@ -583,6 +583,42 @@ function App() {
                     </div>
                   </div>
 
+                  {/* ÖZEL ÖDÜLLER */}
+                  <div className="bg-slate-800/50 rounded-xl p-4 mb-6">
+                    <h3 className="text-sm text-purple-400 uppercase font-bold mb-3">ÖZEL ÖDÜLLER</h3>
+                    <div className="flex flex-col gap-2 text-sm">
+                      {(() => {
+                        let maxSabotage = 0, maxRobbed = 0, maxTrades = 0;
+                        players.forEach(p => {
+                          if (p.gameStats?.sabotagesUsed > maxSabotage) maxSabotage = p.gameStats.sabotagesUsed;
+                          if (p.gameStats?.robbedByTaxCollector > maxRobbed) maxRobbed = p.gameStats.robbedByTaxCollector;
+                          if (p.gameStats?.tradesMade > maxTrades) maxTrades = p.gameStats.tradesMade;
+                        });
+
+                        const gaddar = players.find(p => maxSabotage > 0 && p.gameStats?.sabotagesUsed === maxSabotage);
+                        const sanssiz = players.find(p => maxRobbed > 0 && p.gameStats?.robbedByTaxCollector === maxRobbed);
+                        const borsa = players.find(p => maxTrades > 0 && p.gameStats?.tradesMade === maxTrades);
+
+                        return (
+                          <>
+                            <div className="flex justify-between px-2">
+                              <span className="text-gray-300">😈 En Gaddar:</span>
+                              <span className="font-bold text-white">{gaddar ? `${gaddar.name} (${maxSabotage} Sabotaj)` : '-'}</span>
+                            </div>
+                            <div className="flex justify-between px-2">
+                              <span className="text-gray-300">😭 En Şanssız:</span>
+                              <span className="font-bold text-white">{sanssiz ? `${sanssiz.name} (${maxRobbed} Kere Soyuldu)` : '-'}</span>
+                            </div>
+                            <div className="flex justify-between px-2">
+                              <span className="text-gray-300">📈 Borsa Kurdu:</span>
+                              <span className="font-bold text-white">{borsa ? `${borsa.name} (${maxTrades} Ticaret)` : '-'}</span>
+                            </div>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  </div>
+
                   <p className="text-gray-400 text-sm">
                     Yeni oyun için sayfayı yenileyin
                   </p>

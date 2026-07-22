@@ -158,7 +158,8 @@ export class RoomManager {
       resources: { [ResourceType.LUMBER]: 0, [ResourceType.CONCRETE]: 0, [ResourceType.TEXTILE]: 0, [ResourceType.FOOD]: 0, [ResourceType.DIAMOND]: 0, [ResourceType.GOLD]: 0 },
       devCards: { ...emptyCardHand },
       newDevCards: { ...emptyCardHand },
-      victoryPoints: 0, longestRoad: 0, armySize: 0
+      victoryPoints: 0, longestRoad: 0, armySize: 0,
+      gameStats: { sabotagesUsed: 0, robbedByTaxCollector: 0, tradesMade: 0 }
     });
     if (!this.room.hostId) this.room.hostId = id;
   }
@@ -253,6 +254,7 @@ export class RoomManager {
     const goldGain = RoomManager.SELL_PRICES[sellResource] || 1;
     player.resources[sellResource] -= 1;
     player.resources[ResourceType.GOLD] += goldGain;
+    player.gameStats.tradesMade++;
     return `1 ${sellResource} satıldı, ${goldGain} Altın kazanıldı! 💰`;
   }
 
@@ -318,6 +320,7 @@ export class RoomManager {
 
     player.resources[ResourceType.GOLD] -= rate;
     player.resources[resource] = (player.resources[resource] || 0) + 1;
+    player.gameStats.tradesMade++;
 
     return `Karaborsadan ${rate} altına 1 ${resource} alındı.`;
   }
@@ -347,6 +350,7 @@ export class RoomManager {
     // İşlem
     player.resources[ResourceType.GOLD] -= 33;
     player.victoryPoints += 1;
+    player.gameStats.tradesMade++;
     (player as any).purchasedVPs = purchased + 1;
 
     return `${player.name}, 33 Altın ödeyerek 1 Zafer Puanı satın aldı! (${purchased + 1}/2) 🏆`;
@@ -411,11 +415,13 @@ export class RoomManager {
       case DevCardType.MERCENARY:
         // MEMUR KARTI: Memur sayısını artırır + Vergi Memurunu taşıma modunu açar
         player.armySize++;
+        player.gameStats.robbedByTaxCollector++;
         (this.room.turnSubPhase as any) = 'robber';
         return `Memur kartı oynandı! Memur: ${player.armySize} 💼 Vergi Memurunu taşı.`;
 
       case DevCardType.SABOTAGE:
         // SABOTAJ: Rakip yol yıkma modunu açar
+        player.gameStats.sabotagesUsed++;
         (this.room.turnSubPhase as any) = 'sabotage';
         return "Sabotaj kartı oynandı! Yıkılacak yolu seç. 💣";
 
@@ -628,6 +634,10 @@ export class RoomManager {
     const offerer = this.room.players.find(p => p.id === offererId);
     const partner = this.room.players.find(p => p.id === partnerId);
     if (!offerer || !partner) throw new Error("Oyuncular bulunamadı.");
+
+    offerer.gameStats.tradesMade++;
+    partner.gameStats.tradesMade++;
+
     for (const res in offer.give) { const r = res as ResourceType; offerer.resources[r] -= offer.give[r]; partner.resources[r] += offer.give[r]; }
     for (const res in offer.want) { const r = res as ResourceType; partner.resources[r] -= offer.want[r]; offerer.resources[r] += offer.want[r]; }
     this.room.currentTradeOffer = null;
@@ -878,6 +888,7 @@ export class RoomManager {
       if (goldAmount >= 20) {
         const goldToLose = Math.floor(goldAmount / 2);
         p.resources[ResourceType.GOLD] -= goldToLose;
+        if (goldToLose > 0) p.gameStats.robbedByTaxCollector++;
       }
     });
 
@@ -915,6 +926,8 @@ export class RoomManager {
     const victim = this.room.players.find(p => p.id === victimId);
 
     if (!thief || !victim) throw new Error("Oyuncular bulunamadı!");
+
+    victim.gameStats.robbedByTaxCollector++;
 
     let stolenMessage = "";
 
@@ -1032,6 +1045,10 @@ export class RoomManager {
     if (player.resources[ResourceType.GOLD] >= 33) {
       vp += 1;
     }
+
+    // 7. Satın alınan Zafer Puanları (buyVictoryPoint ile alınanlar)
+    const purchasedVPs = (player as any).purchasedVPs || 0;
+    vp += purchasedVPs;
 
     return vp;
   }

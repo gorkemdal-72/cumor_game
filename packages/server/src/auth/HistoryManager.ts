@@ -6,6 +6,16 @@ export interface GameHistoryPlayer {
     color: string;
     vp: number;
     isWinner: boolean;
+    gameStats?: {
+        sabotagesUsed: number;
+        robbedByTaxCollector: number;
+        tradesMade: number;
+    };
+    awards?: {
+        gaddar: boolean;
+        sanssiz: boolean;
+        borsa: boolean;
+    };
 }
 
 export interface GameHistoryEntry {
@@ -29,6 +39,12 @@ export class HistoryManager {
         durationMinutes: number
     ): Promise<void> {
         
+        // winnerId kontrolü - boş veya geçersiz ise kaydetme
+        if (!winnerId || winnerId.trim() === '') {
+            console.warn("⚠️ Kazanan ID'si boş, oyun geçmişi kaydedilmedi.");
+            return;
+        }
+
         // Önce game_history tablosuna oyunu ekle
         const { data: game, error } = await supabase.from('game_history').insert({
             room_name: roomName,
@@ -49,7 +65,10 @@ export class HistoryManager {
             username: p.username,
             color: p.color,
             vp: p.vp,
-            is_winner: p.isWinner
+            is_winner: p.isWinner,
+            sabotages_used: p.gameStats?.sabotagesUsed || 0,
+            robbed_count: p.gameStats?.robbedByTaxCollector || 0,
+            trades_made: p.gameStats?.tradesMade || 0
         }));
 
         await supabase.from('game_history_players').insert(playersData);
@@ -86,7 +105,10 @@ export class HistoryManager {
                     username,
                     color,
                     vp,
-                    is_winner
+                    is_winner,
+                    sabotages_used,
+                    robbed_count,
+                    trades_made
                 )
             `)
             .in('id', gameIds)
@@ -106,7 +128,12 @@ export class HistoryManager {
                 username: p.username,
                 color: p.color,
                 vp: p.vp,
-                isWinner: p.is_winner
+                isWinner: p.is_winner,
+                gameStats: {
+                    sabotagesUsed: p.sabotages_used || 0,
+                    robbedByTaxCollector: p.robbed_count || 0,
+                    tradesMade: p.trades_made || 0
+                }
             }))
         }));
     }

@@ -57,7 +57,8 @@ export function AuthScreen({ socketUrl, onAuth }: AuthScreenProps) {
 
             if (tab === 'register') {
                 setMsg(data.message);
-                setTab('verify');
+                // setTab('verify'); // İleride e-posta doğrulamasını açmak için bunu aktif edin
+                setTab('login'); // E-posta doğrulama kapalıyken direkt login'e atar
                 return;
             }
 

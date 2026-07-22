@@ -444,29 +444,59 @@ io.on('connection', async (socket) => {
             const durationMinutes = Math.floor((Date.now() - room.gameStartTime) / 60000) || 1; // En az 1 dk
             
             const playersForHistory = gameState.players.map(p => ({
-                userId: p.userId || '',
+                userId: p.userId || undefined, 
                 username: p.name,
                 color: p.color,
                 vp: p.victoryPoints || 0,
-                isWinner: p.id === gameState.winnerId
+                isWinner: p.id === gameState.winnerId,
+                gameStats: p.gameStats || { sabotagesUsed: 0, robbedByTaxCollector: 0, tradesMade: 0 },
+                awards: { gaddar: false, sanssiz: false, borsa: false }
             }));
+
+            // Ödülleri hesapla
+            let maxSabotage = 0, maxRobbed = 0, maxTrades = 0;
+            for (const p of playersForHistory) {
+                if (p.gameStats.sabotagesUsed > maxSabotage) maxSabotage = p.gameStats.sabotagesUsed;
+                if (p.gameStats.robbedByTaxCollector > maxRobbed) maxRobbed = p.gameStats.robbedByTaxCollector;
+                if (p.gameStats.tradesMade > maxTrades) maxTrades = p.gameStats.tradesMade;
+            }
+
+            for (const p of playersForHistory) {
+                if (maxSabotage > 0 && p.gameStats.sabotagesUsed === maxSabotage) p.awards.gaddar = true;
+                if (maxRobbed > 0 && p.gameStats.robbedByTaxCollector === maxRobbed) p.awards.sanssiz = true;
+                if (maxTrades > 0 && p.gameStats.tradesMade === maxTrades) p.awards.borsa = true;
+            }
+
             const winner = gameState.players.find(p => p.id === gameState.winnerId);
             
+            // Giriş yapmış oyuncuları filtrele
+            const loggedInPlayers = playersForHistory.filter(p => p.userId);
+            
             if (winner) {
-                // Oyun geçmişini kaydet (sadece giriş yapmış hesaplar kaydedilir)
-                await historyManager.saveGameResult(
-                    room.name,
-                    playersForHistory.filter(p => p.userId),
-                    winner.userId || '',
-                    winner.name,
-                    durationMinutes
-                );
+                // 1) Oyun geçmişini kaydet (bağımsız try-catch, hata olursa istatistikleri engellemez)
+                try {
+                    if (winner.userId && loggedInPlayers.length > 0) {
+                        await historyManager.saveGameResult(
+                            room.name,
+                            loggedInPlayers as any,
+                            winner.userId,
+                            winner.name,
+                            durationMinutes
+                        );
+                    } else {
+                        console.warn(`⚠️ Kazanan (${winner.name}) giriş yapmamış, oyun geçmişi kaydedilmedi.`);
+                    }
+                } catch (historyErr: any) {
+                    console.error("❌ Oyun geçmişi kayıt hatası:", historyErr?.message || historyErr);
+                }
 
-                // Her oyuncunun profil istatistiklerini güncelle
-                for (const p of gameState.players) {
-                    if (p.userId) {
-                        const isWon = p.id === gameState.winnerId;
-                        await authManager.updateStats(p.userId, isWon, p.victoryPoints || 0, durationMinutes);
+                // 2) Her oyuncunun profil istatistiklerini güncelle (bağımsız, yukarıdaki hatadan etkilenmez)
+                for (const p of loggedInPlayers) {
+                    try {
+                        await authManager.updateStats(p.userId!, p.isWinner, p.vp, durationMinutes, p.awards);
+                        console.log(`📊 İstatistik güncellendi: ${p.username} (VP: ${p.vp}, Kazandı: ${p.isWinner})`);
+                    } catch (statsErr: any) {
+                        console.error(`❌ İstatistik güncelleme hatası (${p.username}):`, statsErr?.message || statsErr);
                     }
                 }
             }
