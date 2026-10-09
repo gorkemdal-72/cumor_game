@@ -11,6 +11,8 @@ import { BuildCostPanel, MobileBuildCostPanel } from './components/BuildCostPane
 import { ChatPanel } from './components/ChatPanel';
 import { AuthScreen } from './components/AuthScreen';
 import { ProfilePanel } from './components/ProfilePanel';
+import { TutorialModal } from './components/TutorialModal';
+import { StorePanel } from './components/StorePanel';
 
 let socket: Socket;
 
@@ -63,6 +65,34 @@ function App() {
   const [authIsAdmin, setAuthIsAdmin] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showStore, setShowStore] = useState(false);
+  const [myProfileData, setMyProfileData] = useState<any>(null);
+
+  // Profil verisini çekme
+  const fetchMyProfile = async () => {
+    if (!authUserId) return;
+    try {
+      const res = await fetch(`${socketUrl}/api/profile/${authUserId}`);
+      const data = await res.json();
+      if (data.success) {
+        setMyProfileData(data.profile);
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    if (authToken && authUserId) {
+      fetchMyProfile();
+    }
+  }, [authToken, authUserId]);
+
+  useEffect(() => {
+    const reloadListener = () => fetchMyProfile();
+    window.addEventListener('reloadProfileData', reloadListener);
+    return () => window.removeEventListener('reloadProfileData', reloadListener);
+  }, [authUserId]);
 
   // MOBİL RESPONSIVE STATE
   const [activeMobilePanel, setActiveMobilePanel] = useState<'none' | 'trade' | 'actions' | 'costs' | 'cards'>('none');
@@ -327,11 +357,26 @@ function App() {
   return (
     <div className="h-screen w-screen bg-[#0f172a] text-white flex flex-col overflow-hidden font-sans">
       <ToastContainer position="top-center" theme="dark" />
+      <TutorialModal />
       <header className="h-14 bg-slate-800/95 border-b border-slate-600 flex items-center px-4 z-20 shrink-0 gap-3">
         {/* SOL: Logo + Durum */}
         <div className="flex items-center gap-2 shrink-0">
           <h1 className="text-xs md:text-xl font-bold text-cyan-400 tracking-wider">CUMOR</h1>
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+          <button 
+            onClick={() => window.dispatchEvent(new Event('openCumorTutorial'))}
+            className="text-xs bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 hover:bg-yellow-500/40 px-2 py-1 rounded transition-colors ml-1"
+          >
+            Nasıl Oynanır?
+          </button>
+          <a 
+            href="/Cumor_Kural_Kitabi.pdf"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs bg-blue-500/20 text-blue-400 border border-blue-500/50 hover:bg-blue-500/40 px-2 py-1 rounded transition-colors ml-1 flex items-center gap-1"
+          >
+            📖 El Kitabı
+          </a>
           {isInGame && (
             <>
               <span className="text-gray-500 text-xs">|</span>
@@ -423,7 +468,13 @@ function App() {
         {!isInGame && (
           <div className="z-10 w-full max-w-4xl px-4 flex flex-col items-center gap-4 py-4 md:py-0">
             {/* Profil Paneli */}
-            <div className="w-full flex justify-end">
+            <div className="w-full flex justify-end gap-2">
+              <button
+                onClick={() => setShowStore(true)}
+                className="flex items-center gap-2 bg-yellow-600/80 hover:bg-yellow-500 text-white px-3 py-1.5 rounded-lg text-xs transition-colors border border-yellow-600 font-bold"
+              >
+                🛒 Mağaza
+              </button>
               <button
                 onClick={() => setShowProfile(!showProfile)}
                 className="flex items-center gap-2 bg-slate-700/80 hover:bg-slate-600 text-white px-3 py-1.5 rounded-lg text-xs transition-colors border border-slate-600"
@@ -435,6 +486,20 @@ function App() {
                 {authIsAdmin && <span className="text-red-400 text-[10px]">⭐</span>}
               </button>
             </div>
+            {showStore && (
+              <StorePanel
+                userId={authUserId!}
+                token={authToken!}
+                sikke={myProfileData?.sikke || 0}
+                equippedBuilding={myProfileData?.equippedBuilding || 'default'}
+                onUpdate={() => {
+                  // Fetch profile logic is in ProfilePanel, we should ideally lift it up or trigger a reload
+                  // For now, we'll just force a small reload or trust the child will handle its own state
+                  window.dispatchEvent(new Event('reloadProfileData'));
+                }}
+                onClose={() => setShowStore(false)}
+              />
+            )}
             {showProfile && (
               <ProfilePanel
                 socketUrl={socketUrl}
@@ -627,23 +692,31 @@ function App() {
             )}
 
             {isInGame && isMyTurn && gameStatus === GameStatus.PLAYING && !hasRolled && (
-              <div className="absolute right-119 bottom-10 z-50 pointer-events-none md:pointer-events-auto">
+              <div className="absolute right-119 bottom-10 z-50 pointer-events-none md:pointer-events-auto flex flex-col items-center gap-2">
                  {/* PC DICE BUTTON (Hidden on Mobile) */}
                 <button onClick={handleRollDice} className="hidden md:flex bg-red-600 hover:bg-red-500 text-white w-24 h-24 rounded-full font-black text-xl shadow-[0_0_30px_rgba(220,38,38,0.6)] border-4 border-slate-900 transition-transform active:scale-90 flex-col items-center justify-center gap-1">
                   <span>🎲</span><span>ZAR AT</span>
                 </button>
+                <div className="hidden md:block text-[10px] text-yellow-500 bg-slate-900/80 p-1 rounded font-bold">
+                  ⚠️ 7 gelirse Vergi Memuru uyanır!
+                </div>
               </div>
             )}
 
             {/* MOBILE DICE BUTTON (Hidden on Desktop) */}
             {isInGame && isMyTurn && gameStatus === GameStatus.PLAYING && !hasRolled && (
+              <div className="md:hidden fixed bottom-40 left-1/2 -translate-x-1/2 z-50 flex flex-col items-center gap-2">
                  <button 
                   onClick={handleRollDice} 
-                  className="md:hidden fixed bottom-40 left-1/2 -translate-x-1/2 bg-red-600 hover:bg-red-500 text-white w-20 h-20 rounded-full font-black text-lg shadow-[0_0_20px_rgba(220,38,38,0.8)] border-4 border-slate-900 z-50 flex flex-col items-center justify-center animate-bounce"
+                  className="bg-red-600 hover:bg-red-500 text-white w-20 h-20 rounded-full font-black text-lg shadow-[0_0_20px_rgba(220,38,38,0.8)] border-4 border-slate-900 flex flex-col items-center justify-center animate-bounce"
                  >
                   <span>🎲</span>
                   <span className="text-xs">ZAR AT</span>
                 </button>
+                <div className="text-[10px] text-yellow-500 bg-slate-900/80 p-1 rounded font-bold text-center">
+                  ⚠️ 7 gelirse Vergi <br/> Memuru uyanır!
+                </div>
+              </div>
             )}
 
             {/* MOBILE END TURN BUTTON (Hidden on Desktop) */}

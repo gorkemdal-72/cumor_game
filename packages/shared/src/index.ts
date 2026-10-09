@@ -1,3 +1,4 @@
 export * from './constants.js'; 
 export * from './types.js';    
 export * from './hex-utils.js'; 
+export * from './cosmetics.js';

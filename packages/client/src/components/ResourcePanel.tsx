@@ -106,11 +106,16 @@ export function ResourcePanelContent({ resources, devCards, onPlayCard, isMyTurn
       {/* KAYNAKLAR */}
       <div className="bg-slate-900/95 backdrop-blur-md border border-slate-700 p-3 rounded-2xl shadow-2xl flex gap-4 h-24 items-center">
         {Object.values(ResourceType).map(type => (
-          <div key={type} className="flex flex-col items-center min-w-[50px]" title={`${RESOURCE_NAMES[type]}: ${resources[type]} adet`}>
+          <div key={type} className="flex flex-col items-center min-w-[50px] relative group" title={`${RESOURCE_NAMES[type]}: ${resources[type]} adet`}>
             <div className="text-2xl mb-1">{RESOURCE_ICONS[type]}</div>
             <div className={`font-black text-lg ${type === ResourceType.GOLD ? 'text-yellow-400' : 'text-white'}`}>
               {resources[type]}
             </div>
+            {type === ResourceType.GOLD && (
+              <div className="absolute -bottom-6 text-[9px] text-yellow-500 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">
+                33 Altın = Lider (+1 VP)
+              </div>
+            )}
           </div>
         ))}
       </div>

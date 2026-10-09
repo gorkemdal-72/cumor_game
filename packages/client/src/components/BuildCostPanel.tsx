@@ -164,13 +164,17 @@ export function BuildCostPanelContent({ playerResources, buildingCounts }: Build
 
             {/* Açıklama */}
             <div className="mt-3 pt-2 border-t border-slate-700/30">
-                <div className="flex items-center justify-center gap-2 text-[10px] text-gray-500">
+                <div className="flex items-center justify-center gap-2 text-[10px] text-gray-500 mb-2">
                     <span className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded bg-green-600"></span> Satın alabilirsin
                     </span>
                     <span className="flex items-center gap-1">
                         <span className="w-2 h-2 rounded bg-red-600"></span> Limit doldu
                     </span>
+                </div>
+                <div className="text-[10px] text-yellow-500/80 text-center flex flex-col items-center">
+                    <span className="font-bold">⚠️ Mesafe Kuralı</span>
+                    <span>İki bina yan yana kurulamaz. Arada en az 2 yol olmalıdır.</span>
                 </div>
             </div>
         </>

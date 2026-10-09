@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import { RoomManager } from './game/RoomManager.js';
-import { PlayerColor, GameStatus } from '@cumor/shared';
+import { PlayerColor, GameStatus, COSMETICS_CATALOG } from '@cumor/shared';
 import { AuthManager } from './auth/AuthManager.js';
 import { HistoryManager } from './auth/HistoryManager.js';
 
@@ -120,6 +120,86 @@ app.get('/api/search-users', async (req, res) => {
   }
 });
 
+// ======== MAĞAZA (STORE) ========
+import { supabase } from './supabase.js';
+
+app.get('/api/store/catalog', (req, res) => {
+  res.json({ success: true, catalog: COSMETICS_CATALOG });
+});
+
+app.get('/api/user/cosmetics/:userId', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('user_cosmetics').select('cosmetic_id').eq('user_id', req.params.userId);
+    if (error) throw error;
+    const ownedIds = data.map(d => d.cosmetic_id);
+    res.json({ success: true, ownedIds });
+  } catch (e: any) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
+app.post('/api/store/buy', async (req, res) => {
+  try {
+    const { token, cosmeticId } = req.body;
+    const auth = await authManager.verifyToken(token);
+    if (!auth) return res.status(401).json({ success: false, message: 'Geçersiz token' });
+
+    const item = COSMETICS_CATALOG.find(c => c.id === cosmeticId);
+    if (!item) throw new Error("Eşya bulunamadı");
+
+    const profile = await authManager.getUserProfile(auth.userId);
+    if (!profile) throw new Error("Profil bulunamadı");
+
+    if (profile.sikke < item.price) throw new Error("Yetersiz Sikke!");
+
+    // Zaten sahip mi? (Default hariç)
+    if (item.id !== 'default') {
+      const { data: existing } = await supabase.from('user_cosmetics').select('id').eq('user_id', auth.userId).eq('cosmetic_id', cosmeticId).maybeSingle();
+      if (existing) throw new Error("Bu eşyaya zaten sahipsiniz!");
+    } else {
+      throw new Error("Varsayılan eşya satın alınamaz.");
+    }
+
+    // Bakiyeyi düş
+    const { error: updateError } = await supabase.from('profiles').update({ sikke: profile.sikke - item.price }).eq('id', auth.userId);
+    if (updateError) throw new Error("Satın alma başarısız (bakiye düşülemedi).");
+
+    // Eşyayı ekle
+    const { error: insertError } = await supabase.from('user_cosmetics').insert({
+      user_id: auth.userId,
+      cosmetic_id: cosmeticId,
+      cosmetic_type: item.type
+    });
+    if (insertError) throw new Error("Satın alma başarısız (eşya eklenemedi).");
+
+    res.json({ success: true, message: 'Satın alma başarılı!' });
+  } catch (e: any) {
+    res.status(400).json({ success: false, message: e.message });
+  }
+});
+
+app.post('/api/user/equip', async (req, res) => {
+  try {
+    const { token, cosmeticId, type } = req.body;
+    const auth = await authManager.verifyToken(token);
+    if (!auth) return res.status(401).json({ success: false, message: 'Geçersiz token' });
+
+    if (cosmeticId !== 'default') {
+       const { data: existing } = await supabase.from('user_cosmetics').select('id').eq('user_id', auth.userId).eq('cosmetic_id', cosmeticId).maybeSingle();
+       if (!existing) throw new Error("Bu eşyaya sahip değilsiniz!");
+    }
+
+    if (type === 'building') {
+       const { error } = await supabase.from('profiles').update({ equipped_building: cosmeticId }).eq('id', auth.userId);
+       if (error) throw new Error("Kuşanma başarısız!");
+    }
+
+    res.json({ success: true, message: 'Eşya kuşanırdı!' });
+  } catch (e: any) {
+    res.status(400).json({ success: false, message: e.message });
+  }
+});
+
 // ======== SOCKET.IO ========
 
 const httpServer = createServer(app);
@@ -197,11 +277,18 @@ io.on('connection', async (socket) => {
     socket.emit('no_active_game');
   });
 
-  socket.on('create_room', (data) => {
+  socket.on('create_room', async (data) => {
     try {
       const roomId = Math.random().toString(36).substr(2, 9);
       const newRoom = new RoomManager(roomId, data.roomName, data.password);
-      newRoom.addPlayer(socket.id, data.playerName, data.playerColor, authInfo?.userId);
+      
+      let equippedBuilding = 'default';
+      if (authInfo?.userId) {
+          const profile = await authManager.getUserProfile(authInfo.userId);
+          if (profile) equippedBuilding = profile.equippedBuilding;
+      }
+
+      newRoom.addPlayer(socket.id, data.playerName, data.playerColor, authInfo?.userId, equippedBuilding);
       rooms.set(roomId, newRoom);
       playerRoomMap.set(socket.id, roomId);
       socket.join(roomId);
@@ -211,7 +298,7 @@ io.on('connection', async (socket) => {
     } catch (e: any) { socket.emit('error_message', { message: e.message }); }
   });
 
-  socket.on('join_room', (data) => {
+  socket.on('join_room', async (data) => {
     try {
       const room = rooms.get(data.roomId);
       if (!room) throw new Error("Oda bulunamadı!");
@@ -238,7 +325,13 @@ io.on('connection', async (socket) => {
       if (room.password && room.password !== data.password) throw new Error("Yanlış şifre!");
 
       // Normal Join
-      room.addPlayer(socket.id, data.playerName, data.playerColor, authInfo?.userId);
+      let equippedBuilding = 'default';
+      if (authInfo?.userId) {
+          const profile = await authManager.getUserProfile(authInfo.userId);
+          if (profile) equippedBuilding = profile.equippedBuilding;
+      }
+
+      room.addPlayer(socket.id, data.playerName, data.playerColor, authInfo?.userId, equippedBuilding);
       playerRoomMap.set(socket.id, data.roomId);
       socket.join(data.roomId);
       socket.emit('join_success');

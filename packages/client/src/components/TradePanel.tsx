@@ -171,9 +171,12 @@ export function TradePanelContent(props: TradePanelProps) {
 
           {/* İTHALAT (KARABORSA) */}
           <div>
-            <div className="flex justify-between items-center mb-2">
+            <div className="flex justify-between items-center mb-1">
               <span className="text-xs text-red-400 font-bold">KARABORSA (AL)</span>
-              <span className="text-[10px] text-gray-500">Altın → Kaynak</span>
+              <span className="text-[10px] text-gray-500">Altın ➡️ Kaynak</span>
+            </div>
+            <div className="text-[9px] text-yellow-500/80 mb-2 leading-tight">
+              <b>ℹ️ Konum Vergisi:</b> Alacağın kaynağın arazisinde <b>Şehrin</b> varsa (+0), <b>Köyün</b> varsa (+1), sadece <b>Yolun</b> varsa (+2) veya <b>hiçbir bağın yoksa</b> (+3) Altın ekstra vergi ödersin!
             </div>
             <div className="grid grid-cols-2 gap-2">
               {resources.map(res => {

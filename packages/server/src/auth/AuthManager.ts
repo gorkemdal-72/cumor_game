@@ -11,6 +11,8 @@ export interface UserProfile {
   totalVP: number;
   totalPlaytimeMinutes: number;
   createdAt: number;
+  sikke: number;
+  equippedBuilding: string;
   awardGaddar?: number;
   awardSanssiz?: number;
   awardBorsa?: number;
@@ -245,6 +247,8 @@ export class AuthManager {
       totalVP: d.total_vp || 0,
       totalPlaytimeMinutes: d.total_playtime_minutes || 0,
       createdAt: new Date(d.created_at).getTime(),
+      sikke: d.sikke || 0,
+      equippedBuilding: d.equipped_building || 'default',
       awardGaddar: d.award_gaddar || 0,
       awardSanssiz: d.award_sanssiz || 0,
       awardBorsa: d.award_borsa || 0
@@ -288,7 +292,9 @@ export class AuthManager {
         gamesWon: d.games_won || 0,
         totalVP: d.total_vp || 0,
         totalPlaytimeMinutes: d.total_playtime_minutes || 0,
-        createdAt: new Date(d.created_at).getTime()
+        createdAt: new Date(d.created_at).getTime(),
+        sikke: d.sikke || 0,
+        equippedBuilding: d.equipped_building || 'default'
     }));
   }
 
@@ -299,18 +305,21 @@ export class AuthManager {
       return;
     }
 
-    const { data: d, error: selectError } = await supabase.from('profiles').select('games_played, games_won, total_vp, total_playtime_minutes, award_gaddar, award_sanssiz, award_borsa').eq('id', userId).single();
+    const { data: d, error: selectError } = await supabase.from('profiles').select('games_played, games_won, total_vp, total_playtime_minutes, sikke, award_gaddar, award_sanssiz, award_borsa').eq('id', userId).single();
     if (selectError) {
       console.error(`❌ updateStats SELECT hatası (${userId}):`, selectError.message);
       return;
     }
     if (!d) return;
     
+    const sikkeEarned = won ? 10 : 2;
+
     const { error: updateError } = await supabase.from('profiles').update({
         games_played: (d.games_played || 0) + 1,
         games_won: (d.games_won || 0) + (won ? 1 : 0),
         total_vp: (d.total_vp || 0) + vp,
         total_playtime_minutes: (d.total_playtime_minutes || 0) + playtimeMinutes,
+        sikke: (d.sikke || 0) + sikkeEarned,
         award_gaddar: (d.award_gaddar || 0) + (awards?.gaddar ? 1 : 0),
         award_sanssiz: (d.award_sanssiz || 0) + (awards?.sanssiz ? 1 : 0),
         award_borsa: (d.award_borsa || 0) + (awards?.borsa ? 1 : 0)

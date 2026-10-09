@@ -17,7 +17,19 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     games_won INTEGER DEFAULT 0,
     total_vp INTEGER DEFAULT 0,
     total_playtime_minutes INTEGER DEFAULT 0,
+    sikke INTEGER DEFAULT 0,
+    equipped_building TEXT DEFAULT 'default',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- Table: user_cosmetics (Store purchased items)
+CREATE TABLE IF NOT EXISTS public.user_cosmetics (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    cosmetic_id TEXT NOT NULL,
+    cosmetic_type TEXT NOT NULL,
+    acquired_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL,
+    UNIQUE(user_id, cosmetic_id)
 );
 
 -- Note: We handle authentication via Supabase Auth. The 'profiles' table stores game-specific user data.

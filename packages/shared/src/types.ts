@@ -50,6 +50,7 @@ export interface Player {
     robbedByTaxCollector: number;
     tradesMade: number;
   };
+  equippedBuilding?: string; // Sikke sistemi ile alınan bina tasarımı
 }
 
 export enum PlayerColor {
@@ -150,6 +151,8 @@ export interface UserAccount {
   totalVP: number;
   totalPlaytimeMinutes: number;
   createdAt: number;
+  sikke: number;
+  equippedBuilding: string;
   awardGaddar?: number;
   awardSanssiz?: number;
   awardBorsa?: number;
