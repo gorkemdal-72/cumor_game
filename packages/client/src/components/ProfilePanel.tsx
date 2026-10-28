@@ -5,22 +5,24 @@ interface ProfilePanelProps {
     userId: string;
     username: string;
     isAdmin: boolean;
-    onLogout: () => void;
+}
+
+interface HistoryPlayer {
+    userId: string;
+    username: string;
+    color: string;
+    vp: number;
+    isWinner: boolean;
+    gameStats?: { sabotagesUsed: number; robbedByTaxCollector: number; tradesMade: number };
 }
 
 interface GameHistoryEntry {
     id: string;
     roomName: string;
     date: number;
-    players: { 
-        userId: string; 
-        username: string; 
-        color: string; 
-        vp: number; 
-        isWinner: boolean;
-        awards?: { gaddar: boolean; sanssiz: boolean; borsa: boolean; };
-    }[];
-    winnerId: string;
+    durationMinutes?: number;
+    players: HistoryPlayer[];
+    winnerId: string | null;
     winnerName: string;
 }
 
@@ -37,32 +39,58 @@ interface UserProfile {
     awardBorsa?: number;
 }
 
-export function ProfilePanel({ socketUrl, userId, username, isAdmin, onLogout }: ProfilePanelProps) {
-    const [tab, setTab] = useState<'profile' | 'history' | 'admin'>('profile');
+const PLACE_STYLES = ['bg-amber-400/20 text-amber-300', 'bg-slate-300/15 text-slate-200', 'bg-orange-700/25 text-orange-300'];
+
+// Oyun sonundaki ödüllerle aynı kural: istatistikte en yüksek (ve > 0) olan oyuncu(lar) alır
+function awardsOf(game: GameHistoryEntry, player: HistoryPlayer) {
+    const max = (key: keyof NonNullable<HistoryPlayer['gameStats']>) => Math.max(0, ...game.players.map(p => p.gameStats?.[key] || 0));
+    const has = (key: keyof NonNullable<HistoryPlayer['gameStats']>) => max(key) > 0 && (player.gameStats?.[key] || 0) === max(key);
+    return [
+        has('sabotagesUsed') && { icon: '😈', title: 'En Gaddar' },
+        has('robbedByTaxCollector') && { icon: '😭', title: 'En Şanssız' },
+        has('tradesMade') && { icon: '📈', title: 'Borsa Kurdu' },
+    ].filter(Boolean) as { icon: string; title: string }[];
+}
+
+function formatPlaytime(mins: number) {
+    if (!mins) return '0 dk';
+    if (mins < 60) return `${mins} dk`;
+    return `${Math.floor(mins / 60)} sa ${mins % 60} dk`;
+}
+
+export function ProfilePanel({ socketUrl, userId, username, isAdmin }: ProfilePanelProps) {
+    const [tab, setTab] = useState<'history' | 'admin'>('history');
     const [profile, setProfile] = useState<UserProfile | null>(null);
-    const [history, setHistory] = useState<GameHistoryEntry[]>([]);
+    const [history, setHistory] = useState<GameHistoryEntry[] | null>(null);
+    const [error, setError] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
     const [adminMsg, setAdminMsg] = useState('');
     const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
 
     useEffect(() => {
-        // Profil bilgisi
-        fetch(`${socketUrl}/api/profile/${userId}`)
-            .then(r => r.json())
-            .then(d => { if (d.success) setProfile(d.profile); });
-
-        // Oyun geçmişi
-        fetch(`${socketUrl}/api/history/${userId}`)
-            .then(r => r.json())
-            .then(d => { if (d.success) setHistory(d.history); });
+        setError('');
+        Promise.all([
+            fetch(`${socketUrl}/api/profile/${userId}`).then(r => r.json()),
+            fetch(`${socketUrl}/api/history/${userId}`).then(r => r.json()),
+        ])
+            .then(([p, h]) => {
+                if (!p.success) throw new Error(p.message);
+                if (!h.success) throw new Error(h.message);
+                setProfile(p.profile);
+                setHistory(h.history);
+            })
+            .catch(e => setError(e.message || 'Profil yüklenemedi'));
     }, [socketUrl, userId]);
 
     const searchUsers = async () => {
         if (!searchQuery.trim()) return;
-        const res = await fetch(`${socketUrl}/api/search-users?q=${encodeURIComponent(searchQuery)}`);
+        const res = await fetch(`${socketUrl}/api/search-users?q=${encodeURIComponent(searchQuery)}`, {
+            headers: { Authorization: `Bearer ${localStorage.getItem('cumor_token')}` }
+        });
         const data = await res.json();
         if (data.success) setSearchResults(data.users);
+        else setAdminMsg(data.message);
     };
 
     const toggleAdmin = async (targetId: string, makeAdmin: boolean) => {
@@ -74,239 +102,168 @@ export function ProfilePanel({ socketUrl, userId, username, isAdmin, onLogout }:
         });
         const data = await res.json();
         setAdminMsg(data.message);
-        // Listeyi güncelle
         searchUsers();
         setTimeout(() => setAdminMsg(''), 3000);
     };
 
-    const winRate = profile && profile.gamesPlayed > 0
-        ? Math.round((profile.gamesWon / profile.gamesPlayed) * 100)
-        : 0;
+    if (error) {
+        return (
+            <div className="card p-8 text-center">
+                <p className="text-red-400 font-semibold">Profil yüklenemedi</p>
+                <p className="text-sm text-slate-400 mt-1">{error}</p>
+            </div>
+        );
+    }
 
-    const avgVP = profile && profile.gamesPlayed > 0 && profile.totalVP
-        ? (profile.totalVP / profile.gamesPlayed).toFixed(1)
-        : 0;
+    if (!profile || !history) {
+        return <div className="card p-8 text-center text-slate-400" role="status">Profil yükleniyor…</div>;
+    }
 
-    const formatPlaytime = (mins: number) => {
-        if (!mins) return '0 dk';
-        if (mins < 60) return `${mins} dk`;
-        const h = Math.floor(mins / 60);
-        const m = mins % 60;
-        return `${h}s ${m}dk`;
-    };
+    const winRate = profile.gamesPlayed > 0 ? Math.round((profile.gamesWon / profile.gamesPlayed) * 100) : 0;
+    const avgVP = profile.gamesPlayed > 0 ? ((profile.totalVP || 0) / profile.gamesPlayed).toFixed(1) : '0';
 
     return (
-        <div className="bg-slate-800/80 rounded-xl border border-slate-700 p-4 w-full max-w-md">
-            {/* HEADER */}
-            <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-white font-bold text-lg">
-                        {username.charAt(0).toUpperCase()}
-                    </div>
-                    <div>
-                        <div className="text-white font-bold flex items-center gap-1">
-                            {username}
-                            {isAdmin && <span className="text-xs bg-red-500/20 text-red-400 px-1.5 py-0.5 rounded font-bold">ADMİN</span>}
-                        </div>
-                        <div className="text-xs text-slate-400">
-                            {profile ? `${profile.gamesPlayed} oyun • %${winRate} kazanma` : '...'}
-                        </div>
-                    </div>
+        <div className="space-y-6">
+            {/* ÜST: kimlik */}
+            <section className="card p-5 md:p-6 flex items-center gap-4">
+                <div className="w-14 h-14 md:w-16 md:h-16 rounded-full bg-gradient-to-br from-amber-400 to-orange-600 flex items-center justify-center text-2xl font-black text-slate-950 shrink-0">
+                    {username.charAt(0).toUpperCase()}
                 </div>
-                <button
-                    onClick={onLogout}
-                    className="text-xs bg-slate-700 hover:bg-red-600 text-slate-300 hover:text-white px-3 py-1.5 rounded transition-colors"
-                >
-                    Çıkış
-                </button>
-            </div>
+                <div className="min-w-0">
+                    <h1 className="text-xl md:text-2xl font-black text-white flex items-center gap-2 truncate">
+                        {username}
+                        {isAdmin && <span className="badge bg-red-500/15 text-red-400">ADMİN</span>}
+                    </h1>
+                    <p className="text-sm text-slate-400">{profile.gamesPlayed} oyun · %{winRate} kazanma oranı</p>
+                </div>
+            </section>
 
-            {/* TABS */}
-            <div className="flex border-b border-slate-700 mb-3 text-xs">
-                <button
-                    onClick={() => setTab('profile')}
-                    className={`flex-1 py-2 font-bold ${tab === 'profile' ? 'text-blue-400 border-b border-blue-400' : 'text-slate-500'}`}
-                >
-                    📊 İstatistik
-                </button>
-                <button
-                    onClick={() => setTab('history')}
-                    className={`flex-1 py-2 font-bold ${tab === 'history' ? 'text-amber-400 border-b border-amber-400' : 'text-slate-500'}`}
-                >
-                    📜 Geçmiş
-                </button>
-                {isAdmin && (
-                    <button
-                        onClick={() => setTab('admin')}
-                        className={`flex-1 py-2 font-bold ${tab === 'admin' ? 'text-red-400 border-b border-red-400' : 'text-slate-500'}`}
-                    >
-                        ⚙️ Admin
+            {/* İSTATİSTİKLER */}
+            <section className="grid grid-cols-2 md:grid-cols-5 gap-3" aria-label="İstatistikler">
+                <div className="stat"><div className="text-3xl font-black text-white">{profile.gamesPlayed}</div><div className="stat-label">Toplam oyun</div></div>
+                <div className="stat"><div className="text-3xl font-black text-emerald-400">{profile.gamesWon}</div><div className="stat-label">Galibiyet</div></div>
+                <div className="stat"><div className="text-3xl font-black text-amber-400">%{winRate}</div><div className="stat-label">Kazanma oranı</div></div>
+                <div className="stat"><div className="text-3xl font-black text-sky-400">{avgVP}</div><div className="stat-label">Ortalama VP ({profile.totalVP || 0} toplam)</div></div>
+                <div className="stat col-span-2 md:col-span-1"><div className="text-2xl font-black text-violet-400">{formatPlaytime(profile.totalPlaytimeMinutes || 0)}</div><div className="stat-label">Oyunda geçen süre</div></div>
+            </section>
+
+            <section className="card p-5">
+                <h2 className="text-sm font-bold text-slate-300 mb-3">Başarımlar</h2>
+                <div className="grid grid-cols-3 gap-3">
+                    {[
+                        { icon: '😈', label: 'En Gaddar', hint: 'En çok sabotaj', value: profile.awardGaddar, color: 'text-red-400' },
+                        { icon: '😭', label: 'En Şanssız', hint: 'En çok soyulan', value: profile.awardSanssiz, color: 'text-sky-400' },
+                        { icon: '📈', label: 'Borsa Kurdu', hint: 'En çok ticaret', value: profile.awardBorsa, color: 'text-amber-400' },
+                    ].map(a => (
+                        <div key={a.label} className="stat !p-3" title={a.hint}>
+                            <div className="text-2xl" aria-hidden>{a.icon}</div>
+                            <div className={`text-xl font-black ${a.color}`}>{a.value || 0}</div>
+                            <div className="stat-label">{a.label}</div>
+                        </div>
+                    ))}
+                </div>
+            </section>
+
+            {/* GEÇMİŞ / ADMİN */}
+            <section className="card p-5">
+                <div className="flex gap-1 mb-4 border-b border-slate-700" role="tablist">
+                    <button role="tab" aria-selected={tab === 'history'} onClick={() => setTab('history')}
+                        className={`px-3 py-2 text-sm font-bold border-b-2 -mb-px ${tab === 'history' ? 'text-amber-400 border-amber-400' : 'text-slate-400 border-transparent hover:text-white'}`}>
+                        Son oyunlar
                     </button>
-                )}
-            </div>
-
-            {/* İSTATİSTİK */}
-            {tab === 'profile' && profile && (
-                <div className="space-y-2">
-                    <div className="grid grid-cols-3 gap-2">
-                        <div className="bg-slate-900/50 rounded-lg p-3 text-center border border-slate-700/50">
-                            <div className="text-2xl font-black text-white">{profile.gamesPlayed}</div>
-                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Toplam Oyun</div>
-                        </div>
-                        <div className="bg-slate-900/50 rounded-lg p-3 text-center border border-slate-700/50">
-                            <div className="text-2xl font-black text-green-400">{profile.gamesWon}</div>
-                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Kazanılan</div>
-                        </div>
-                        <div className="bg-slate-900/50 rounded-lg p-3 text-center border border-slate-700/50">
-                            <div className="text-2xl font-black text-amber-400">%{winRate}</div>
-                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold">Kazanma Oranı</div>
-                        </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2">
-                        <div className="bg-slate-900/50 rounded-lg p-3 text-center border border-slate-700/50">
-                            <div className="flex justify-center items-baseline gap-1">
-                                <span className="text-xl font-black text-blue-400">{profile.totalVP || 0}</span>
-                                <span className="text-xs text-slate-500 font-bold">({avgVP} ort)</span>
-                            </div>
-                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mt-1">Toplam Zafer Puanı</div>
-                        </div>
-                        <div className="bg-slate-900/50 rounded-lg p-3 text-center border border-slate-700/50">
-                            <div className="text-xl font-black text-purple-400">{formatPlaytime(profile.totalPlaytimeMinutes || 0)}</div>
-                            <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mt-1">Oyunda Geçen Süre</div>
-                        </div>
-                    </div>
-                    {/* ÖDÜLLER */}
-                    <div className="bg-slate-900/50 rounded-lg p-3 border border-slate-700/50 mt-2">
-                        <div className="text-[10px] text-slate-400 uppercase tracking-wider font-bold mb-2">Başarımlar</div>
-                        <div className="grid grid-cols-3 gap-2">
-                            <div className="text-center">
-                                <div className="text-xl font-black text-red-400">{profile.awardGaddar || 0}</div>
-                                <div className="text-[10px] text-slate-300">😈 En Gaddar</div>
-                            </div>
-                            <div className="text-center">
-                                <div className="text-xl font-black text-blue-400">{profile.awardSanssiz || 0}</div>
-                                <div className="text-[10px] text-slate-300">😭 En Şanssız</div>
-                            </div>
-                            <div className="text-center">
-                                <div className="text-xl font-black text-yellow-400">{profile.awardBorsa || 0}</div>
-                                <div className="text-[10px] text-slate-300">📈 Borsa Kurdu</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-            {/* OYUN GEÇMİŞİ */}
-            {tab === 'history' && (
-                <div className="max-h-60 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
-                    {history.length === 0 ? (
-                        <p className="text-center text-slate-500 text-sm py-4">Henüz oyun geçmişi yok</p>
-                    ) : (
-                        history.map(g => {
-                            const myResult = g.players.find(p => p.userId === userId);
-                            const isExpanded = expandedGameId === g.id;
-                            const duration = (g as any).durationMinutes || 0;
-                            
-                            return (
-                                <div key={g.id} className="bg-slate-900/50 rounded-lg border border-slate-700/50 overflow-hidden transition-all duration-200">
-                                    <div 
-                                        className={`p-3 cursor-pointer hover:bg-slate-800/50 flex justify-between items-center ${isExpanded ? 'bg-slate-800/50' : ''}`}
-                                        onClick={() => setExpandedGameId(isExpanded ? null : g.id)}
-                                    >
-                                        <div>
-                                            <div className="font-bold text-white text-sm flex items-center gap-2">
-                                                {g.roomName}
-                                                {myResult?.isWinner && <span className="text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded">Kazandın 🏆</span>}
-                                            </div>
-                                            <div className="text-xs text-slate-400 mt-1 flex items-center gap-2">
-                                                <span>{new Date(g.date).toLocaleDateString('tr-TR')}</span>
-                                                <span>•</span>
-                                                <span className="flex items-center gap-1">⏱️ {duration > 0 ? `${duration} dk` : '? dk'}</span>
-                                            </div>
-                                        </div>
-                                        <div className="text-slate-500 transform transition-transform duration-200">
-                                            {isExpanded ? '▼' : '▶'}
-                                        </div>
-                                    </div>
-                                    
-                                    {isExpanded && (
-                                        <div className="bg-slate-900/80 p-3 border-t border-slate-700/50">
-                                            <div className="text-[10px] uppercase text-slate-500 font-bold mb-2 tracking-wider">Oyuncular ve Skorlar</div>
-                                            <div className="space-y-1.5">
-                                                {g.players.sort((a,b) => b.vp - a.vp).map((p, idx) => (
-                                                    <div key={idx} className="flex items-center justify-between text-xs bg-slate-800/50 p-1.5 rounded">
-                                                        <div className="flex items-center gap-2">
-                                                            <div className="w-3 h-3 rounded-sm border border-black/20" style={{ backgroundColor: p.color }}></div>
-                                                            <span className={p.userId === userId ? 'text-blue-300 font-bold' : 'text-slate-300'}>
-                                                                {p.username}
-                                                            </span>
-                                                            {p.isWinner && <span className="text-amber-400 text-[10px]">👑</span>}
-                                                        </div>
-                                                        <div className="flex flex-col items-end">
-                                                            <div className="font-bold text-slate-300 bg-slate-900 px-2 py-0.5 rounded border border-slate-700">
-                                                                {p.vp} VP
-                                                            </div>
-                                                            <div className="flex gap-1 mt-1 justify-end w-full">
-                                                                {p.awards?.gaddar && <span title="En Gaddar" className="text-xs">😈</span>}
-                                                                {p.awards?.sanssiz && <span title="En Şanssız" className="text-xs">😭</span>}
-                                                                {p.awards?.borsa && <span title="Borsa Kurdu" className="text-xs">📈</span>}
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })
-                    )}
-                </div>
-            )}
-
-            {/* ADMİN PANELİ — Kullanıcı Yönetimi */}
-            {tab === 'admin' && isAdmin && (
-                <div className="space-y-3">
-                    {adminMsg && (
-                        <div className="bg-green-500/10 border border-green-500/30 text-green-400 text-xs p-2 rounded">
-                            {adminMsg}
-                        </div>
-                    )}
-                    <div className="flex gap-2">
-                        <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={e => setSearchQuery(e.target.value)}
-                            onKeyDown={e => e.key === 'Enter' && searchUsers()}
-                            placeholder="Kullanıcı adı ara..."
-                            className="flex-1 p-2 bg-slate-900/50 text-white rounded text-xs border border-slate-600 outline-none"
-                        />
-                        <button onClick={searchUsers} className="bg-blue-600 hover:bg-blue-500 text-white px-3 rounded text-xs font-bold">
-                            Ara
+                    {isAdmin && (
+                        <button role="tab" aria-selected={tab === 'admin'} onClick={() => setTab('admin')}
+                            className={`px-3 py-2 text-sm font-bold border-b-2 -mb-px ${tab === 'admin' ? 'text-red-400 border-red-400' : 'text-slate-400 border-transparent hover:text-white'}`}>
+                            Kullanıcı yönetimi
                         </button>
-                    </div>
-                    <div className="space-y-1 max-h-32 overflow-y-auto">
-                        {searchResults.map(u => (
-                            <div key={u.id} className="flex items-center justify-between bg-slate-900/50 p-2 rounded text-xs">
-                                <div>
-                                    <span className="text-white font-bold">{u.username}</span>
-                                    {u.isAdmin && <span className="ml-1 text-red-400">⭐</span>}
-                                    <span className="text-slate-500 ml-2">{u.gamesPlayed} oyun</span>
-                                </div>
-                                <button
-                                    onClick={() => toggleAdmin(u.id, !u.isAdmin)}
-                                    className={`px-2 py-1 rounded font-bold ${u.isAdmin
-                                            ? 'bg-red-500/20 text-red-400 hover:bg-red-500/40'
-                                            : 'bg-green-500/20 text-green-400 hover:bg-green-500/40'
-                                        }`}
-                                >
-                                    {u.isAdmin ? 'Admin Kaldır' : 'Admin Yap'}
-                                </button>
-                            </div>
-                        ))}
-                    </div>
+                    )}
                 </div>
-            )}
+
+                {tab === 'history' && (
+                    history.length === 0 ? (
+                        <div className="text-center py-10">
+                            <div className="text-4xl mb-2" aria-hidden>📜</div>
+                            <p className="font-semibold text-slate-200">Henüz tamamlanmış oyunun yok</p>
+                            <p className="text-sm text-slate-400 mt-1">Bir oyun bitirdiğinde sonucu burada görünür.</p>
+                        </div>
+                    ) : (
+                        <ul className="space-y-2">
+                            {history.map(g => {
+                                const ranked = [...g.players].sort((a, b) => b.vp - a.vp);
+                                const myIndex = ranked.findIndex(p => p.userId === userId);
+                                const me = ranked[myIndex];
+                                const isExpanded = expandedGameId === g.id;
+                                const date = new Date(g.date);
+                                return (
+                                    <li key={g.id} className="bg-slate-900/50 border border-slate-700/60 rounded-xl overflow-hidden">
+                                        <button
+                                            className="w-full p-3 md:p-4 flex items-center gap-3 text-left hover:bg-slate-800/50 transition-colors"
+                                            onClick={() => setExpandedGameId(isExpanded ? null : g.id)}
+                                            aria-expanded={isExpanded}
+                                        >
+                                            <span className={`w-10 h-10 shrink-0 rounded-lg flex items-center justify-center font-black ${PLACE_STYLES[myIndex] ?? 'bg-slate-700/50 text-slate-300'}`}
+                                                title={`${myIndex + 1}. oldun`}>
+                                                {me?.isWinner ? '🏆' : `${myIndex + 1}.`}
+                                            </span>
+                                            <span className="min-w-0 flex-1">
+                                                <span className="block font-bold text-white truncate">{g.roomName}</span>
+                                                <span className="block text-xs text-slate-400 mt-0.5">
+                                                    {date.toLocaleDateString('tr-TR')} {date.toLocaleTimeString('tr-TR', { hour: '2-digit', minute: '2-digit' })}
+                                                    {' · '}{g.durationMinutes ? `${g.durationMinutes} dk` : 'süre yok'}
+                                                    {' · '}Kazanan: {g.winnerName}
+                                                </span>
+                                            </span>
+                                            {me && <span className="text-sm font-bold text-slate-200 shrink-0">{me.vp} VP</span>}
+                                            <span className="text-slate-500 text-xs" aria-hidden>{isExpanded ? '▲' : '▼'}</span>
+                                        </button>
+
+                                        {isExpanded && (
+                                            <ol className="border-t border-slate-700/60 p-3 space-y-1.5">
+                                                {ranked.map((p, idx) => (
+                                                    <li key={idx} className="flex items-center gap-2 text-sm bg-slate-800/50 px-3 py-2 rounded-lg">
+                                                        <span className="w-5 text-slate-500 font-bold">{idx + 1}.</span>
+                                                        <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: p.color }} aria-hidden />
+                                                        <span className={`flex-1 truncate ${p.userId === userId ? 'text-amber-300 font-bold' : 'text-slate-200'}`}>
+                                                            {p.username}{p.isWinner && ' 👑'}
+                                                        </span>
+                                                        {awardsOf(g, p).map(a => <span key={a.title} title={a.title} aria-label={a.title}>{a.icon}</span>)}
+                                                        <span className="font-bold text-slate-200 w-12 text-right">{p.vp} VP</span>
+                                                    </li>
+                                                ))}
+                                            </ol>
+                                        )}
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )
+                )}
+
+                {tab === 'admin' && isAdmin && (
+                    <div className="space-y-3">
+                        {adminMsg && <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-sm p-2.5 rounded-lg">{adminMsg}</div>}
+                        <form className="flex gap-2" onSubmit={e => { e.preventDefault(); searchUsers(); }}>
+                            <input type="text" value={searchQuery} onChange={e => setSearchQuery(e.target.value)}
+                                placeholder="Kullanıcı adı ara…" className="input" aria-label="Kullanıcı adı ara" />
+                            <button type="submit" className="btn btn-secondary">Ara</button>
+                        </form>
+                        <ul className="space-y-1.5">
+                            {searchResults.map(u => (
+                                <li key={u.id} className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-lg text-sm">
+                                    <span>
+                                        <span className="text-white font-bold">{u.username}</span>
+                                        {u.isAdmin && <span className="badge bg-red-500/15 text-red-400 ml-2">ADMİN</span>}
+                                        <span className="text-slate-500 ml-2">{u.gamesPlayed} oyun</span>
+                                    </span>
+                                    <button onClick={() => toggleAdmin(u.id, !u.isAdmin)} className={`btn !py-1 !px-2.5 text-xs ${u.isAdmin ? 'bg-red-500/15 text-red-400 hover:bg-red-500/30' : 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/30'}`}>
+                                        {u.isAdmin ? 'Admin kaldır' : 'Admin yap'}
+                                    </button>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+            </section>
         </div>
     );
 }

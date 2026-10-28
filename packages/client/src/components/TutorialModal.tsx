@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Modal } from './Modal';
 
 const tutorialSlides = [
   {
@@ -18,7 +19,7 @@ const tutorialSlides = [
   },
   {
     title: 'Tur Akışı',
-    content: 'Sıra sana geldiğinde zarları atarsın (veya senin yerine otomatik atılır). Gelen sayıya sahip araziler, kenarında binası olan oyunculara kaynak üretir. Köy 1 kaynak, Şehir 2 kaynak üretir. Ayrıca CUMOR\'da kervan yolu (Yol Ticaret Geliri) mekaniği vardır!',
+    content: 'Sıra sana geldiğinde zarları atarsın. Gelen sayıya sahip araziler, kenarında binası olan oyunculara kaynak üretir. Köy 1 kaynak, Şehir 2 kaynak üretir. Ayrıca CUMOR\'da kervan yolu (Yol Ticaret Geliri) mekaniği vardır!',
     icon: '🎲'
   },
   {
@@ -38,7 +39,7 @@ const tutorialSlides = [
   },
   {
     title: '7 Zarı ve Vergi Memuru',
-    content: 'Zarlar 7 geldiğinde kimse kaynak üretmez. Elinde 7 veya fazla kaynak olanlar, yarısını bankaya iade eder (Altınlar hariç). Zarı atan kişi Vergi Memuru piyonunu istediği araziye taşır, o arazi bloke olur ve bir oyuncudan rastgele kaynak çalar.',
+    content: 'Zarlar 7 geldiğinde kimse kaynak üretmez. Elinde 7\'den fazla kaynak olanlar, yarısını bankaya iade eder (Altınlar hariç). Zarı atan kişi Vergi Memuru piyonunu istediği araziye taşır, o arazi bloke olur ve bir oyuncudan rastgele kaynak çalar.',
     icon: '🥷'
   },
   {
@@ -58,16 +59,12 @@ export const TutorialModal: React.FC = () => {
   const [currentSlide, setCurrentSlide] = useState(0);
 
   useEffect(() => {
-    const hasSeen = localStorage.getItem('hasSeenCumorTutorial');
-    if (!hasSeen) {
-      setIsOpen(true);
-    }
+    if (!localStorage.getItem('hasSeenCumorTutorial')) setIsOpen(true);
 
     const handleOpenTutorial = () => {
       setCurrentSlide(0);
       setIsOpen(true);
     };
-
     window.addEventListener('openCumorTutorial', handleOpenTutorial);
     return () => window.removeEventListener('openCumorTutorial', handleOpenTutorial);
   }, []);
@@ -77,66 +74,53 @@ export const TutorialModal: React.FC = () => {
     setIsOpen(false);
   };
 
-  const nextSlide = () => {
-    if (currentSlide < tutorialSlides.length - 1) {
-      setCurrentSlide(currentSlide + 1);
-    } else {
-      closeTutorial();
-    }
-  };
+  const isLast = currentSlide === tutorialSlides.length - 1;
+  const nextSlide = () => (isLast ? closeTutorial() : setCurrentSlide(currentSlide + 1));
+  const prevSlide = () => setCurrentSlide(Math.max(0, currentSlide - 1));
 
-  const prevSlide = () => {
-    if (currentSlide > 0) {
-      setCurrentSlide(currentSlide - 1);
-    }
-  };
+  // Klavye: sağ/sol ok ile slayt değiştir (Esc Modal içinde)
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowRight') nextSlide();
+      if (e.key === 'ArrowLeft') prevSlide();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  });
 
   if (!isOpen) return null;
+  const slide = tutorialSlides[currentSlide];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-      <div className="bg-slate-800 border-2 border-yellow-500/50 rounded-xl shadow-2xl max-w-lg w-full overflow-hidden flex flex-col">
-        <div className="bg-slate-900 p-4 border-b border-slate-700 flex justify-between items-center">
-          <h2 className="text-xl font-bold text-yellow-400">Nasıl Oynanır?</h2>
-          <button onClick={closeTutorial} className="text-slate-400 hover:text-white transition-colors">
-            ✕
-          </button>
-        </div>
-        
-        <div className="p-6 flex-1 min-h-[250px] flex flex-col justify-center items-center text-center">
-          <div className="text-5xl mb-4">{tutorialSlides[currentSlide].icon}</div>
-          <h3 className="text-2xl font-bold text-white mb-3">{tutorialSlides[currentSlide].title}</h3>
-          <p className="text-slate-300 text-lg leading-relaxed">
-            {tutorialSlides[currentSlide].content}
-          </p>
-        </div>
-        
-        <div className="p-4 bg-slate-900 border-t border-slate-700 flex justify-between items-center">
-          <div className="flex space-x-2">
+    <Modal
+      title="Nasıl Oynanır?"
+      onClose={closeTutorial}
+      footer={
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex gap-1.5" aria-label={`Slayt ${currentSlide + 1} / ${tutorialSlides.length}`}>
             {tutorialSlides.map((_, idx) => (
-              <div 
-                key={idx} 
-                className={`w-2 h-2 rounded-full ${idx === currentSlide ? 'bg-yellow-400' : 'bg-slate-600'}`}
+              <button
+                key={idx}
+                onClick={() => setCurrentSlide(idx)}
+                aria-label={`${idx + 1}. slayt`}
+                className={`h-2 rounded-full transition-all ${idx === currentSlide ? 'w-5 bg-amber-400' : 'w-2 bg-slate-600 hover:bg-slate-500'}`}
               />
             ))}
           </div>
-          <div className="flex space-x-3">
-            <button 
-              onClick={prevSlide}
-              disabled={currentSlide === 0}
-              className="px-4 py-2 bg-slate-700 text-white rounded disabled:opacity-50 hover:bg-slate-600 transition-colors"
-            >
-              Geri
-            </button>
-            <button 
-              onClick={nextSlide}
-              className="px-4 py-2 bg-yellow-500 text-slate-900 font-bold rounded hover:bg-yellow-400 transition-colors"
-            >
-              {currentSlide === tutorialSlides.length - 1 ? 'Başla!' : 'İleri'}
-            </button>
+          <div className="flex gap-2">
+            <button onClick={prevSlide} disabled={currentSlide === 0} className="btn btn-secondary">Geri</button>
+            <button onClick={nextSlide} className="btn btn-primary">{isLast ? 'Başla!' : 'İleri'}</button>
           </div>
         </div>
+      }
+    >
+      <div className="min-h-[220px] flex flex-col items-center justify-center text-center">
+        <div className="text-5xl mb-4" aria-hidden>{slide.icon}</div>
+        <h3 className="text-2xl font-bold text-white mb-3">{slide.title}</h3>
+        <p className="text-slate-300 leading-relaxed">{slide.content}</p>
+        <p className="text-xs text-slate-500 mt-4">{currentSlide + 1} / {tutorialSlides.length}</p>
       </div>
-    </div>
+    </Modal>
   );
 };

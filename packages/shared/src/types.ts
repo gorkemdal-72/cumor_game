@@ -51,6 +51,7 @@ export interface Player {
     tradesMade: number;
   };
   equippedBuilding?: string; // Sikke sistemi ile alınan bina tasarımı
+  disconnected?: boolean;    // Oyun sırasında bağlantısı koptu (geri dönmesi bekleniyor)
 }
 
 export enum PlayerColor {
@@ -110,6 +111,10 @@ export interface GameState {
   freeRoadsRemaining: number;           // Mühendis kartı: Kalan ücretsiz yol hakkı
   traderPicksRemaining: number;         // Tüccar kartı: Kalan kaynak seçme hakkı
   devCardDeckCount?: number;            // Destede kalan kart sayısı (admin bilgisi)
+
+  // Bir oyuncu düşünce: bağlı oyuncular oyunu bitirmek için oylar (çoğunluk → en yüksek puanlı kazanır)
+  disconnectVote?: { endVotes: string[]; deadline: number } | null;
+  endReason?: 'normal' | 'vote' | 'timeout'; // Oyun nasıl bitti (sonuç ekranında gösterilir)
 }
 
 export interface RoomInfo {

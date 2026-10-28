@@ -63,7 +63,7 @@ export function ActionPanelContent({ onBuildRoad, onBuildSettlement, onBuildCity
               <span className="text-[10px] font-bold">KART (1💎 1🐑 1🌾)</span>
               {devCardDeckCount !== undefined && (
                 <span className={`text-[9px] font-bold ${devCardDeckCount <= 5 ? 'text-red-300' : 'text-yellow-300'}`}>
-                  Deste: {devCardDeckCount}/30
+                  Destede {devCardDeckCount} kart
                 </span>
               )}
             </button>

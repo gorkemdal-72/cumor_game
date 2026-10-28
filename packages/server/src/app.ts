@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
@@ -29,10 +29,35 @@ app.get('/health', (req, res) => {
   res.status(200).send('OK');
 });
 
+// ======== DENEME SINIRI (brute force engeli) ========
+// shortcut: bellek içi sayaç, tek sunucu instance'ı için yeterli; birden fazla instance olursa paylaşımlı (Redis) limiter'a geç
+const attempts = new Map<string, { count: number; resetAt: number }>();
+setInterval(() => { const now = Date.now(); for (const [k, v] of attempts) if (v.resetAt < now) attempts.delete(k); }, 10 * 60 * 1000);
+
+function rateLimit(max: number, windowMs: number) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = `${req.path}:${req.ip}`;
+    const now = Date.now();
+    const entry = attempts.get(key);
+    if (!entry || entry.resetAt < now) {
+      attempts.set(key, { count: 1, resetAt: now + windowMs });
+      return next();
+    }
+    if (++entry.count > max) return res.status(429).json({ success: false, message: 'Çok fazla deneme yaptınız, birkaç dakika sonra tekrar deneyin.' });
+    next();
+  };
+}
+
+// Authorization: Bearer <token> başlığından kullanıcıyı çöz
+async function authFromHeader(req: Request) {
+  const token = req.header('authorization')?.replace(/^Bearer\s+/i, '');
+  return token ? authManager.verifyToken(token) : null;
+}
+
 // ======== REST API: HESAP SİSTEMİ ========
 
 // KAYIT
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', rateLimit(5, 60 * 60 * 1000), async (req, res) => {
   try {
     const { username, password, email } = req.body;
     const result = await authManager.register(username, password, email);
@@ -43,7 +68,7 @@ app.post('/api/register', async (req, res) => {
 });
 
 // GİRİŞ
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', rateLimit(10, 15 * 60 * 1000), async (req, res) => {
   try {
     const { username, password } = req.body;
     const result = await authManager.login(username, password);
@@ -53,19 +78,15 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// ŞİFREMİ UNUTTUM
-app.post('/api/forgot', async (req, res) => {
-  try {
-    const { username } = req.body;
-    await authManager.forgotPassword(username);
-    res.json({ success: true, message: 'Sıfırlama bağlantısı gönderildi' });
-  } catch (e: any) {
-    res.status(400).json({ success: false, message: e.message });
-  }
+// ÇIKIŞ: Token'ı sunucuda da geçersiz kıl
+app.post('/api/logout', async (req, res) => {
+  const token = req.header('authorization')?.replace(/^Bearer\s+/i, '');
+  if (token) await authManager.logout(token).catch(e => console.error('Logout error:', e));
+  res.json({ success: true });
 });
 
 // E-POSTA DOĞRULAMA (YENİ)
-app.post('/api/verify-email', async (req, res) => {
+app.post('/api/verify-email', rateLimit(10, 15 * 60 * 1000), async (req, res) => {
   try {
     const { email, code } = req.body;
     await authManager.verifyEmail(email, code);
@@ -112,7 +133,9 @@ app.post('/api/set-admin', async (req, res) => {
 // KULLANICI ARA (admin paneli için)
 app.get('/api/search-users', async (req, res) => {
   try {
-    const query = (req.query.q as string) || '';
+    const auth = await authFromHeader(req);
+    if (!auth?.isAdmin) return res.status(403).json({ success: false, message: 'Admin yetkisi gerekli' });
+    const query = ((req.query.q as string) || '').replace(/[%_]/g, ''); // LIKE joker karakterlerini temizle
     const users = await authManager.searchUsers(query);
     res.json({ success: true, users });
   } catch (e: any) {
@@ -147,30 +170,16 @@ app.post('/api/store/buy', async (req, res) => {
     const item = COSMETICS_CATALOG.find(c => c.id === cosmeticId);
     if (!item) throw new Error("Eşya bulunamadı");
 
-    const profile = await authManager.getUserProfile(auth.userId);
-    if (!profile) throw new Error("Profil bulunamadı");
+    if (item.id === 'default') throw new Error("Varsayılan eşya satın alınamaz.");
 
-    if (profile.sikke < item.price) throw new Error("Yetersiz Sikke!");
-
-    // Zaten sahip mi? (Default hariç)
-    if (item.id !== 'default') {
-      const { data: existing } = await supabase.from('user_cosmetics').select('id').eq('user_id', auth.userId).eq('cosmetic_id', cosmeticId).maybeSingle();
-      if (existing) throw new Error("Bu eşyaya zaten sahipsiniz!");
-    } else {
-      throw new Error("Varsayılan eşya satın alınamaz.");
-    }
-
-    // Bakiyeyi düş
-    const { error: updateError } = await supabase.from('profiles').update({ sikke: profile.sikke - item.price }).eq('id', auth.userId);
-    if (updateError) throw new Error("Satın alma başarısız (bakiye düşülemedi).");
-
-    // Eşyayı ekle
-    const { error: insertError } = await supabase.from('user_cosmetics').insert({
-      user_id: auth.userId,
-      cosmetic_id: cosmeticId,
-      cosmetic_type: item.type
+    // Bakiye kontrolü + düşme + eşya ekleme tek transaction'da (supabase_security.sql → buy_cosmetic)
+    const { error: buyError } = await supabase.rpc('buy_cosmetic', {
+      p_user_id: auth.userId,
+      p_cosmetic_id: item.id,
+      p_cosmetic_type: item.type,
+      p_price: item.price
     });
-    if (insertError) throw new Error("Satın alma başarısız (eşya eklenemedi).");
+    if (buyError) throw new Error(buyError.message || "Satın alma başarısız.");
 
     res.json({ success: true, message: 'Satın alma başarılı!' });
   } catch (e: any) {
@@ -194,7 +203,7 @@ app.post('/api/user/equip', async (req, res) => {
        if (error) throw new Error("Kuşanma başarısız!");
     }
 
-    res.json({ success: true, message: 'Eşya kuşanırdı!' });
+    res.json({ success: true, message: 'Tasarım kuşanıldı!' });
   } catch (e: any) {
     res.status(400).json({ success: false, message: e.message });
   }
@@ -219,31 +228,112 @@ const socketUserMap = new Map<string, { userId: string; isAdmin: boolean }>(); /
 // Disconnect timeout'ları (5 dk sonra oyundan kaldır)
 const disconnectTimers = new Map<string, NodeJS.Timeout>(); // userId -> timer
 
-io.on('connection', async (socket) => {
-  console.log(`🔌 Yeni bağlantı: ${socket.id}`);
+// OYUN BİTİŞİ: sonucu ve istatistikleri bir kez kaydet (end_turn ve kopma sonrası otomatik tur bitişi kullanır)
+async function saveIfFinished(room: RoomManager) {
+  const gameState = room.getGameState();
+  if (gameState.status !== GameStatus.FINISHED || (room as any).isSaved) return;
+  (room as any).isSaved = true; // Sadece bir kez kaydetmek için
+  const durationMinutes = Math.floor((Date.now() - room.gameStartTime) / 60000) || 1; // En az 1 dk
+  
+  const playersForHistory = gameState.players.map(p => ({
+      userId: p.userId || undefined, 
+      username: p.name,
+      color: p.color,
+      vp: p.victoryPoints || 0,
+      isWinner: p.id === gameState.winnerId,
+      gameStats: p.gameStats || { sabotagesUsed: 0, robbedByTaxCollector: 0, tradesMade: 0 },
+      awards: { gaddar: false, sanssiz: false, borsa: false }
+  }));
 
-  // Token ile kullanıcı doğrulama
+  // Ödülleri hesapla
+  let maxSabotage = 0, maxRobbed = 0, maxTrades = 0;
+  for (const p of playersForHistory) {
+      if (p.gameStats.sabotagesUsed > maxSabotage) maxSabotage = p.gameStats.sabotagesUsed;
+      if (p.gameStats.robbedByTaxCollector > maxRobbed) maxRobbed = p.gameStats.robbedByTaxCollector;
+      if (p.gameStats.tradesMade > maxTrades) maxTrades = p.gameStats.tradesMade;
+  }
+
+  for (const p of playersForHistory) {
+      if (maxSabotage > 0 && p.gameStats.sabotagesUsed === maxSabotage) p.awards.gaddar = true;
+      if (maxRobbed > 0 && p.gameStats.robbedByTaxCollector === maxRobbed) p.awards.sanssiz = true;
+      if (maxTrades > 0 && p.gameStats.tradesMade === maxTrades) p.awards.borsa = true;
+  }
+
+  const winner = gameState.players.find(p => p.id === gameState.winnerId);
+  
+  // Giriş yapmış oyuncuları filtrele
+  const loggedInPlayers = playersForHistory.filter(p => p.userId);
+  
+  if (winner) {
+      // 1) Oyun geçmişini kaydet (bağımsız try-catch, hata olursa istatistikleri engellemez)
+      try {
+          if (loggedInPlayers.length > 0) {
+              await historyManager.saveGameResult(
+                  room.name,
+                  loggedInPlayers as any,
+                  winner.userId || null, // Misafir kazanan: winner_id null (kolon nullable)
+                  winner.name,
+                  durationMinutes
+              );
+          }
+      } catch (historyErr: any) {
+          console.error("❌ Oyun geçmişi kayıt hatası:", historyErr?.message || historyErr);
+      }
+
+      // 2) Her oyuncunun profil istatistiklerini güncelle (bağımsız, yukarıdaki hatadan etkilenmez)
+      for (const p of loggedInPlayers) {
+          try {
+              await authManager.updateStats(p.userId!, p.isWinner, p.vp, durationMinutes, p.awards);
+              console.log(`📊 İstatistik güncellendi: ${p.username} (VP: ${p.vp}, Kazandı: ${p.isWinner})`);
+          } catch (statsErr: any) {
+              console.error(`❌ İstatistik güncelleme hatası (${p.username}):`, statsErr?.message || statsErr);
+          }
+      }
+  }
+}
+
+// Oylama veya zaman aşımıyla biten oyun: kaydet, herkese gönder, düşmüş oyuncuları bitmiş odadan temizle
+function finishGameAndCleanup(roomId: string, room: RoomManager) {
+  io.to(roomId).emit('game_state_update', room.getGameState());
+  saveIfFinished(room)
+    .catch(e => console.error('Kayıt hatası:', e))
+    .finally(() => {
+      for (const p of room.getGameState().players.filter(p => p.disconnected)) room.removePlayer(p.id);
+      if (room.isEmpty()) rooms.delete(roomId);
+      io.emit('room_list_update', Array.from(rooms.values()).map(r => r.getRoomInfo()));
+    });
+}
+
+// Token doğrulama middleware'de: connection handler'ı async olursa, doğrulama sürerken gelen eventler (reconnect_to_game) kaybolur
+io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token as string;
-  let authInfo: { userId: string; isAdmin: boolean } | null = null;
-
+  socket.data.auth = null;
   if (token) {
     try {
-      authInfo = await authManager.verifyToken(token);
-      if (authInfo) {
-        userSocketMap.set(authInfo.userId, socket.id);
-        socketUserMap.set(socket.id, authInfo);
-        console.log(`✅ Auth: ${authInfo.userId} (admin: ${authInfo.isAdmin})`);
-
-        // Reconnect timer varsa iptal et
-        const timer = disconnectTimers.get(authInfo.userId);
-        if (timer) {
-          clearTimeout(timer);
-          disconnectTimers.delete(authInfo.userId);
-          console.log(`⏱️ Disconnect timer iptal: ${authInfo.userId}`);
-        }
-      }
+      socket.data.auth = await authManager.verifyToken(token);
     } catch (e) {
       console.error('Auth error:', e);
+    }
+  }
+  next();
+});
+
+io.on('connection', (socket) => {
+  console.log(`🔌 Yeni bağlantı: ${socket.id}`);
+
+  const authInfo: { userId: string; isAdmin: boolean } | null = socket.data.auth;
+
+  if (authInfo) {
+    userSocketMap.set(authInfo.userId, socket.id);
+    socketUserMap.set(socket.id, authInfo);
+    console.log(`✅ Auth: ${authInfo.userId} (admin: ${authInfo.isAdmin})`);
+
+    // Reconnect timer varsa iptal et
+    const timer = disconnectTimers.get(authInfo.userId);
+    if (timer) {
+      clearTimeout(timer);
+      disconnectTimers.delete(authInfo.userId);
+      console.log(`⏱️ Disconnect timer iptal: ${authInfo.userId}`);
     }
   }
 
@@ -257,6 +347,7 @@ io.on('connection', async (socket) => {
 
     // userId ile aktif oda bul
     for (const [roomId, room] of rooms) {
+      if (room.getGameState().status === GameStatus.FINISHED) continue; // Bitmiş oyuna geri sokma
       const player = room.findPlayerByUserId(authInfo.userId);
       if (player) {
         // Eski socket'ten yeni socket'e geç
@@ -302,7 +393,7 @@ io.on('connection', async (socket) => {
     try {
       const room = rooms.get(data.roomId);
       if (!room) throw new Error("Oda bulunamadı!");
-      if (room.isBanned(socket.id)) throw new Error("Bu odadan atıldınız!");
+      if (room.isBanned(socket.id) || (authInfo && room.isBanned(authInfo.userId))) throw new Error("Bu odadan atıldınız!");
 
       // RECONNECT KONTROLÜ: Kullanıcı zaten odada mı? (authInfo.userId ile kontrol)
       if (authInfo && authInfo.userId) {
@@ -337,6 +428,41 @@ io.on('connection', async (socket) => {
       socket.emit('join_success');
       io.emit('room_list_update', Array.from(rooms.values()).map(r => r.getRoomInfo()));
       io.to(data.roomId).emit('game_state_update', room.getGameState());
+    } catch (e: any) { socket.emit('error_message', { message: e.message }); }
+  });
+
+  // DÜŞEN OYUNCU OYLAMASI: { end: true } = oyunu bitir, { end: false } = beklemeye devam
+  socket.on('vote_end_game', (data: { end: boolean }) => {
+    try {
+      const roomId = playerRoomMap.get(socket.id);
+      const room = roomId ? rooms.get(roomId) : undefined;
+      if (!roomId || !room) return;
+      const ended = room.castDisconnectVote(socket.id, data?.end === true);
+      if (ended) {
+        io.to(roomId).emit('system_alert', { message: '🗳️ Oylama sonucu oyun bitirildi. En yüksek puanlı oyuncu kazandı.' });
+        finishGameAndCleanup(roomId, room);
+      } else {
+        io.to(roomId).emit('game_state_update', room.getGameState());
+      }
+    } catch (e: any) { socket.emit('error_message', { message: e.message }); }
+  });
+
+  // ODADAN AYRIL (Lobide veya oyun bittikten sonra)
+  socket.on('leave_room', () => {
+    try {
+      const roomId = playerRoomMap.get(socket.id);
+      if (!roomId) return;
+      const room = rooms.get(roomId);
+      if (room) {
+        const status = room.getGameState().status;
+        if (status !== GameStatus.LOBBY && status !== GameStatus.FINISHED) throw new Error("Oyun sürerken odadan ayrılamazsın!");
+        room.removePlayer(socket.id);
+        if (room.isEmpty()) rooms.delete(roomId);
+        else io.to(roomId).emit('game_state_update', room.getGameState());
+      }
+      socket.leave(roomId);
+      playerRoomMap.delete(socket.id);
+      io.emit('room_list_update', Array.from(rooms.values()).map(r => r.getRoomInfo()));
     } catch (e: any) { socket.emit('error_message', { message: e.message }); }
   });
 
@@ -447,7 +573,7 @@ io.on('connection', async (socket) => {
       if (room) {
         room.buyDevelopmentCard(socket.id);
         io.to(room.getRoomInfo().id).emit('game_state_update', room.getGameState());
-        socket.emit('system_alert', { message: "Gelişim Kartı satın alındı! 🃏" });
+        socket.emit('system_alert', { message: "🃏 Gelişim kartı aldın! Bir sonraki turunda oynayabilirsin (Zafer Puanı kartı hemen sayılır)." });
       }
     } catch (e: any) {
       socket.emit('error_message', { message: e.message });
@@ -526,74 +652,10 @@ io.on('connection', async (socket) => {
   socket.on('end_turn', async () => {
     try {
       const room = rooms.get(playerRoomMap.get(socket.id)!);
-      if (room) { 
-        room.endTurn(socket.id); 
-        const gameState = room.getGameState();
-        io.to(room.getRoomInfo().id).emit('game_state_update', gameState); 
-
-        // OYUN BİTİŞ KONTROLÜ VE VERİTABANINA KAYIT
-        if (gameState.status === GameStatus.FINISHED && !(room as any).isSaved) {
-            (room as any).isSaved = true; // Sadece bir kez kaydetmek için
-            const durationMinutes = Math.floor((Date.now() - room.gameStartTime) / 60000) || 1; // En az 1 dk
-            
-            const playersForHistory = gameState.players.map(p => ({
-                userId: p.userId || undefined, 
-                username: p.name,
-                color: p.color,
-                vp: p.victoryPoints || 0,
-                isWinner: p.id === gameState.winnerId,
-                gameStats: p.gameStats || { sabotagesUsed: 0, robbedByTaxCollector: 0, tradesMade: 0 },
-                awards: { gaddar: false, sanssiz: false, borsa: false }
-            }));
-
-            // Ödülleri hesapla
-            let maxSabotage = 0, maxRobbed = 0, maxTrades = 0;
-            for (const p of playersForHistory) {
-                if (p.gameStats.sabotagesUsed > maxSabotage) maxSabotage = p.gameStats.sabotagesUsed;
-                if (p.gameStats.robbedByTaxCollector > maxRobbed) maxRobbed = p.gameStats.robbedByTaxCollector;
-                if (p.gameStats.tradesMade > maxTrades) maxTrades = p.gameStats.tradesMade;
-            }
-
-            for (const p of playersForHistory) {
-                if (maxSabotage > 0 && p.gameStats.sabotagesUsed === maxSabotage) p.awards.gaddar = true;
-                if (maxRobbed > 0 && p.gameStats.robbedByTaxCollector === maxRobbed) p.awards.sanssiz = true;
-                if (maxTrades > 0 && p.gameStats.tradesMade === maxTrades) p.awards.borsa = true;
-            }
-
-            const winner = gameState.players.find(p => p.id === gameState.winnerId);
-            
-            // Giriş yapmış oyuncuları filtrele
-            const loggedInPlayers = playersForHistory.filter(p => p.userId);
-            
-            if (winner) {
-                // 1) Oyun geçmişini kaydet (bağımsız try-catch, hata olursa istatistikleri engellemez)
-                try {
-                    if (winner.userId && loggedInPlayers.length > 0) {
-                        await historyManager.saveGameResult(
-                            room.name,
-                            loggedInPlayers as any,
-                            winner.userId,
-                            winner.name,
-                            durationMinutes
-                        );
-                    } else {
-                        console.warn(`⚠️ Kazanan (${winner.name}) giriş yapmamış, oyun geçmişi kaydedilmedi.`);
-                    }
-                } catch (historyErr: any) {
-                    console.error("❌ Oyun geçmişi kayıt hatası:", historyErr?.message || historyErr);
-                }
-
-                // 2) Her oyuncunun profil istatistiklerini güncelle (bağımsız, yukarıdaki hatadan etkilenmez)
-                for (const p of loggedInPlayers) {
-                    try {
-                        await authManager.updateStats(p.userId!, p.isWinner, p.vp, durationMinutes, p.awards);
-                        console.log(`📊 İstatistik güncellendi: ${p.username} (VP: ${p.vp}, Kazandı: ${p.isWinner})`);
-                    } catch (statsErr: any) {
-                        console.error(`❌ İstatistik güncelleme hatası (${p.username}):`, statsErr?.message || statsErr);
-                    }
-                }
-            }
-        }
+      if (room) {
+        room.endTurn(socket.id);
+        io.to(room.getRoomInfo().id).emit('game_state_update', room.getGameState());
+        await saveIfFinished(room);
       }
     } catch (e: any) { socket.emit('error_message', { message: e.message }); }
   });
@@ -647,35 +709,27 @@ io.on('connection', async (socket) => {
           if (room.isEmpty()) rooms.delete(roomId);
           else {
             io.to(roomId).emit('game_state_update', room.getGameState());
-            io.to(roomId).emit('system_alert', { message: "Bir oyuncu ayrıldı." });
+            io.to(roomId).emit('system_alert', { message: `${name} odadan ayrıldı.` });
           }
         } else {
-          // Oyunda: 5 dk sonra kaldır
+          // Oyunda: sıra geçmez, oyun bekler. Bağlı oyuncular "bitir" oylayabilir; 5 dk içinde dönmezse oyun biter
+          const name = room.getGameState().players.find(p => p.id === socket.id)?.name || 'Bir oyuncu';
           io.to(roomId).emit('game_state_update', room.getGameState());
-          io.to(roomId).emit('system_alert', { message: "Bir oyuncunun bağlantısı koptu. 5 dk içinde dönmezse atılacak. ⏱️" });
+          io.to(roomId).emit('system_alert', { message: `🔌 ${name} oyundan düştü. 5 dk içinde dönmezse oyun biter ve en yüksek puanlı kazanır. İsterseniz oylamayla hemen bitirebilirsiniz.` });
 
-          if (userInfo) {
-            const timer = setTimeout(() => {
-              // 5 dk doldu, hâlâ dönmediyse sil
-              const currentRoom = rooms.get(roomId);
-              if (currentRoom) {
-                // userId ile oyuncuyu bul
-                const player = currentRoom.findPlayerByUserId(userInfo.userId);
-                if (player && (player as any).disconnected) {
-                  currentRoom.removePlayer(player.id);
-                  if (currentRoom.isEmpty()) rooms.delete(roomId);
-                  else {
-                    io.to(roomId).emit('game_state_update', currentRoom.getGameState());
-                    io.to(roomId).emit('system_alert', { message: `${player.name} bağlantı zaman aşımı nedeniyle oyundan çıkarıldı.` });
-                  }
-                  io.emit('room_list_update', Array.from(rooms.values()).map(r => r.getRoomInfo()));
-                }
-              }
-              disconnectTimers.delete(userInfo.userId);
-            }, 5 * 60 * 1000); // 5 dakika
-
-            disconnectTimers.set(userInfo.userId, timer);
-          }
+          const timerKey = userInfo?.userId || socket.id; // Misafir geri dönemez ama yine de oylama/süre işler
+          const timer = setTimeout(() => {
+            disconnectTimers.delete(timerKey);
+            const currentRoom = rooms.get(roomId);
+            if (!currentRoom) return;
+            const state = currentRoom.getGameState();
+            const stillGone = state.players.some(p => p.disconnected);
+            if (!stillGone || state.status === GameStatus.FINISHED || state.status === GameStatus.LOBBY) return;
+            currentRoom.endGameByHighestScore('timeout');
+            io.to(roomId).emit('system_alert', { message: `⏱️ ${name} 5 dakika içinde dönmedi. Oyun bitti, en yüksek puanlı oyuncu kazandı.` });
+            finishGameAndCleanup(roomId, currentRoom);
+          }, RoomManager.DISCONNECT_TIMEOUT_MS);
+          disconnectTimers.set(timerKey, timer);
         }
         io.emit('room_list_update', Array.from(rooms.values()).map(r => r.getRoomInfo()));
       }
@@ -736,15 +790,22 @@ io.on('connection', async (socket) => {
       if (room) {
         const message = room.rollStartDice(socket.id);
         io.to(room.getRoomInfo().id).emit('game_state_update', room.getGameState());
-        io.to(room.getRoomInfo().id).emit('system_alert', { message });
+        // Her atış zar panelinde zaten görünüyor; bildirimi sadece eşitlikte ve sıralama belirlenince gönder (spam olmasın)
+        if (room.getGameState().status !== GameStatus.ROLLING_FOR_START || message.includes('Eşitlik')) {
+          io.to(room.getRoomInfo().id).emit('system_alert', { message });
+        }
         io.emit('room_list_update', Array.from(rooms.values()).map(r => r.getRoomInfo()));
       }
     } catch (e: any) { socket.emit('error_message', { message: e.message }); }
   });
 
   // CHAT SİSTEMİ
+  let lastChatAt = 0;
   socket.on('send_chat_message', (data: { text: string }) => {
     try {
+      const text = typeof data?.text === 'string' ? data.text.trim().slice(0, 300) : '';
+      if (!text || Date.now() - lastChatAt < 500) return; // Boş mesaj ve spam engeli
+      lastChatAt = Date.now();
       const roomId = playerRoomMap.get(socket.id);
       if (!roomId) return;
       const room = rooms.get(roomId);
@@ -754,7 +815,7 @@ io.on('connection', async (socket) => {
           io.to(roomId).emit('chat_message', {
             senderId: player.id,
             senderName: player.name,
-            text: data.text,
+            text,
             color: player.color,
             timestamp: Date.now()
           });
@@ -805,13 +866,10 @@ io.on('connection', async (socket) => {
       if (!roomId) return;
       const room = rooms.get(roomId);
       if (room) {
-        // Admin yetkisi: hesap bazlı VEYA eski host kontrolü
-        const userInfo = socketUserMap.get(socket.id);
-        const isAccountAdmin = userInfo?.isAdmin || false;
-        const isHost = room.getGameState().hostId === socket.id;
-        if (!isAccountAdmin && !isHost) throw new Error("Admin yetkisi gerekli!");
+        // Sadece hesap adminleri (oda sahibi değil)
+        if (!socketUserMap.get(socket.id)?.isAdmin) throw new Error("Admin yetkisi gerekli!");
 
-        const msg = room.adminGiveResources(socket.id, data.targetId, data.resources);
+        const msg = room.adminGiveResources(data.targetId, data.resources);
         io.to(roomId).emit('game_state_update', room.getGameState());
         socket.emit('system_alert', { message: msg });
       }
@@ -825,12 +883,9 @@ io.on('connection', async (socket) => {
       if (!roomId) return;
       const room = rooms.get(roomId);
       if (room) {
-        const userInfo = socketUserMap.get(socket.id);
-        const isAccountAdmin = userInfo?.isAdmin || false;
-        const isHost = room.getGameState().hostId === socket.id;
-        if (!isAccountAdmin && !isHost) throw new Error("Admin yetkisi gerekli!");
+        if (!socketUserMap.get(socket.id)?.isAdmin) throw new Error("Admin yetkisi gerekli!");
 
-        const msg = room.adminSetVP(socket.id, data.targetId, data.vp);
+        const msg = room.adminSetVP(data.targetId, data.vp);
         io.to(roomId).emit('game_state_update', room.getGameState());
         socket.emit('system_alert', { message: msg });
       }

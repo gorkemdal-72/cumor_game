@@ -13,6 +13,25 @@ import { AuthScreen } from './components/AuthScreen';
 import { ProfilePanel } from './components/ProfilePanel';
 import { TutorialModal } from './components/TutorialModal';
 import { StorePanel } from './components/StorePanel';
+import { HomeHeader, type HomeTab } from './components/HomeHeader';
+import { STATUS_LABELS } from './components/Lobby';
+import { GameHelpPanel } from './components/GameHelpPanel';
+import { DisconnectVotePanel } from './components/DisconnectVotePanel';
+import { WaitingRoom } from './components/WaitingRoom';
+import { RESOURCE_INFO } from './gameInfo';
+
+// Zar sonrası "ne kazandın/kaybettin" bildirimi için: zar sonucu gelir, ardından gelen durum güncellemesinde farka bakılır
+let pendingDice: { die1: number; die2: number; total: number } | null = null;
+let lastMyResources: Record<string, number> | null = null;
+
+function describeResourceChange(before: Record<string, number>, after: Record<string, number>) {
+  const parts: string[] = [];
+  for (const type of Object.values(ResourceType)) {
+    const diff = (after[type] || 0) - (before[type] || 0);
+    if (diff !== 0) parts.push(`${diff > 0 ? '+' : ''}${diff} ${RESOURCE_INFO[type].icon} ${RESOURCE_INFO[type].name}`);
+  }
+  return parts.join(', ');
+}
 
 let socket: Socket;
 
@@ -41,7 +60,7 @@ function App() {
   const [longestRoadPlayerId, setLongestRoadPlayerId] = useState<string | null>(null);
   const [largestArmyPlayerId, setLargestArmyPlayerId] = useState<string | null>(null);
   const [activeCartelPlayerId, setActiveCartelPlayerId] = useState<string | null>(null);
-  const [startRolls, setStartRolls] = useState<{ playerId: string, roll: number | null }[]>([]);
+  const [startRolls, setStartRolls] = useState<{ playerId: string, rolls: number[] }[]>([]);
   const [isChatOpen, setIsChatOpen] = useState(false); // CHAT STATE
   const [highlightNumber, setHighlightNumber] = useState<number | null>(null); // ZAR SONUCU (Tile Highlight İçin)
 
@@ -64,8 +83,10 @@ function App() {
   const [authUsername, setAuthUsername] = useState<string>(localStorage.getItem('cumor_username') || '');
   const [authIsAdmin, setAuthIsAdmin] = useState(false);
   const [authChecked, setAuthChecked] = useState(false);
-  const [showProfile, setShowProfile] = useState(false);
-  const [showStore, setShowStore] = useState(false);
+  const [homeTab, setHomeTab] = useState<HomeTab>('play');
+  const [showHelp, setShowHelp] = useState(false);
+  const [disconnectVote, setDisconnectVote] = useState<GameState['disconnectVote']>(null);
+  const [endReason, setEndReason] = useState<GameState['endReason']>(undefined);
   const [myProfileData, setMyProfileData] = useState<any>(null);
 
   // Profil verisini çekme
@@ -87,12 +108,6 @@ function App() {
       fetchMyProfile();
     }
   }, [authToken, authUserId]);
-
-  useEffect(() => {
-    const reloadListener = () => fetchMyProfile();
-    window.addEventListener('reloadProfileData', reloadListener);
-    return () => window.removeEventListener('reloadProfileData', reloadListener);
-  }, [authUserId]);
 
   // MOBİL RESPONSIVE STATE
   const [activeMobilePanel, setActiveMobilePanel] = useState<'none' | 'trade' | 'actions' | 'costs' | 'cards'>('none');
@@ -125,6 +140,10 @@ function App() {
       if (info) {
         setAuthIsAdmin(info.isAdmin);
         setAuthChecked(true);
+      } else {
+        // Token geçersiz: misafir olarak oynayıp istatistik kaybetmesin, tekrar giriş yapsın
+        toast.error('Oturumunuz geçersiz, lütfen tekrar giriş yapın.');
+        handleLogout();
       }
     });
 
@@ -158,12 +177,30 @@ function App() {
       setTraderPicksRemaining((gameState as any).traderPicksRemaining || 0);
       setDevCardDeckCount((gameState as any).devCardDeckCount || 0);
       if (gameState.hasRolled !== undefined) setHasRolled(gameState.hasRolled);
+      setDisconnectVote(gameState.disconnectVote ?? null);
+      setEndReason(gameState.endReason);
+
+      // Zar bildirimi: zarla birlikte bu oyuncunun kazandığı/kaybettiği kaynakları tek mesajda göster
+      const me = gameState.players.find(p => p.id === socket.id);
+      if (pendingDice && me && lastMyResources) {
+        const change = describeResourceChange(lastMyResources, me.resources);
+        const head = `🎲 ${pendingDice.total} geldi (${pendingDice.die1}+${pendingDice.die2})`;
+        if (pendingDice.total === 7) {
+          toast.warning(`${head} — Vergi Memuru uyandı!${change ? ` Kaybın: ${change}` : ' Kaynak kaybın yok.'}`, { autoClose: 6000 });
+        } else if (change) {
+          toast.success(`${head} — Kazancın: ${change}`, { autoClose: 5000 });
+        } else {
+          toast.info(`${head} — Bu zardan kaynak almadın.`, { autoClose: 3500 });
+        }
+      }
+      pendingDice = null;
+      if (me) lastMyResources = { ...me.resources };
     });
     socket.on('dice_result', (data: { die1: number, die2: number, total: number }) => {
       setHasRolled(true);
       setHighlightNumber(data.total);
       setTimeout(() => setHighlightNumber(null), 3000);
-      toast.info(`🎲 Zar: ${data.total} (${data.die1}+${data.die2})`, { autoClose: 3000, theme: "dark" });
+      pendingDice = data; // Bildirim, hemen arkasından gelen durum güncellemesinde (kaynak farkıyla) gösterilir
     });
 
     socket.on('robber_victims', (data: { victims: string[] }) => {
@@ -213,6 +250,8 @@ function App() {
 
   // Logout handler
   const handleLogout = () => {
+    const token = localStorage.getItem('cumor_token');
+    if (token) fetch(`${socketUrl}/api/logout`, { method: 'POST', headers: { Authorization: `Bearer ${token}` } }).catch(() => {});
     localStorage.removeItem('cumor_token');
     localStorage.removeItem('cumor_userId');
     localStorage.removeItem('cumor_username');
@@ -222,7 +261,7 @@ function App() {
     setAuthIsAdmin(false);
     setAuthChecked(false);
     setIsInGame(false);
-    setShowProfile(false);
+    setHomeTab('play');
     if (socket) socket.disconnect();
   };
 
@@ -242,6 +281,13 @@ function App() {
 
 
   useEffect(() => { if (activePlayerId === myId) setHasRolled(false); }, [activePlayerId, myId]);
+
+  // Sıra sana geçince haber ver (başka sekmedeysen veya dalgınsan kaçırma)
+  useEffect(() => {
+    if (!myId || activePlayerId !== myId) return;
+    if (gameStatus === GameStatus.PLAYING) toast.info('🎯 Sıra sende! Zar atarak başla.', { toastId: 'my-turn', autoClose: 3000 });
+    else if (gameStatus.startsWith('setup')) toast.info('🎯 Sıra sende! Haritaya bir köy ve yanına bir yol yerleştir.', { toastId: 'my-turn', autoClose: 4000 });
+  }, [activePlayerId, myId, gameStatus]);
 
   const handleRollDice = () => socket.emit('roll_dice');
   const handleEndTurn = () => { socket.emit('end_turn'); setHasRolled(false); setTurnSubPhase('waiting'); };
@@ -344,6 +390,35 @@ function App() {
   const myPlayer = players.find(p => p.id === myId);
   const isAdmin = authIsAdmin;
 
+  // "ŞİMDİ NE YAPMALIYIM?" İPUCU: oyunun o anki durumuna göre tek cümlelik yönlendirme
+  const phase = turnSubPhase as string;
+  const cartelOwner = players.find(p => p.id === activeCartelPlayerId);
+  const phaseHint: { text: string; strong?: boolean } | null = (() => {
+    if (!isInGame || disconnectVote) return null;
+    if (gameStatus.startsWith('setup')) {
+      if (!isMyTurn) return { text: `⏳ ${activePlayer?.name ?? 'Rakip'} başlangıç yerleşimini yapıyor…` };
+      return phase === 'road'
+        ? { text: '🛣️ Kurulum: az önce kurduğun köyün yanındaki bir kenara tıklayıp yol yerleştir (ücretsiz).', strong: true }
+        : { text: '🏠 Kurulum: boş bir köşeye tıklayıp ücretsiz köy kur. Komşu köşeler boş olmalı.', strong: true };
+    }
+    if (gameStatus !== GameStatus.PLAYING) return null;
+    if (!isMyTurn) {
+      const who = `⏳ ${activePlayer?.name ?? 'Rakip'} oynuyor…`;
+      return { text: cartelOwner ? `${who} 🏢 Kartel aktif: ${cartelOwner.name} dışında kimse üretim yapamıyor.` : who };
+    }
+    if (!hasRolled) return { text: '🎲 Sıra sende! Turuna başlamak için zar at. (7 gelirse Vergi Memuru uyanır)', strong: true };
+    switch (phase) {
+      case 'robber': return { text: '🥷 Vergi Memurunu taşımak için bir araziye tıkla. O arazi üretmez ve oradaki bir rakipten kaynak alırsın.', strong: true };
+      case 'sabotage': return { text: '💣 Sabotaj: yıkmak istediğin rakip yoluna tıkla.', strong: true };
+      case 'free_road': return { text: `🛣️ Mühendis: ${freeRoadsRemaining} ücretsiz yol hakkın var. Yolunun/köyünün ucundaki bir kenara tıkla.`, strong: true };
+      case 'road': return { text: '🛣️ Yol: kendi yoluna veya köyüne bağlı boş bir kenara tıkla. (1🧱 1🌲) Vazgeçmek için İptal.', strong: true };
+      case 'settlement': return { text: '🏠 Köy: yolunun ucundaki boş bir köşeye tıkla. Yanındaki köşeler boş olmalı. (1🧱 1🌲 1🐑 1🌾)', strong: true };
+      case 'city': return { text: '🏰 Şehir: yükseltmek istediğin kendi köyüne tıkla. (2🌾 3💎)', strong: true };
+      case 'trader_pick': return null; // Tüccar penceresi zaten açık
+      default: return { text: '✅ İnşa et, ticaret yap veya kart oyna. İşin bitince "Turu Bitir".' };
+    }
+  })();
+
   // Auth ekranı: token yoksa giriş/kayıt göster
   if (!authToken) {
     return (
@@ -356,38 +431,33 @@ function App() {
 
   return (
     <div className="h-screen w-screen bg-[#0f172a] text-white flex flex-col overflow-hidden font-sans">
-      <ToastContainer position="top-center" theme="dark" />
+      <ToastContainer position="top-center" theme="dark" limit={3} newestOnTop autoClose={3500} />
       <TutorialModal />
+      {showHelp && <GameHelpPanel onClose={() => setShowHelp(false)} />}
+      {!isInGame ? (
+        <HomeHeader
+          tab={homeTab}
+          onTabChange={setHomeTab}
+          username={authUsername}
+          isAdmin={authIsAdmin}
+          sikke={myProfileData ? myProfileData.sikke ?? 0 : null}
+          isConnected={isConnected}
+          onLogout={handleLogout}
+        />
+      ) : (
       <header className="h-14 bg-slate-800/95 border-b border-slate-600 flex items-center px-4 z-20 shrink-0 gap-3">
         {/* SOL: Logo + Durum */}
         <div className="flex items-center gap-2 shrink-0">
           <h1 className="text-xs md:text-xl font-bold text-cyan-400 tracking-wider">CUMOR</h1>
           <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-          <button 
-            onClick={() => window.dispatchEvent(new Event('openCumorTutorial'))}
-            className="text-xs bg-yellow-500/20 text-yellow-400 border border-yellow-500/50 hover:bg-yellow-500/40 px-2 py-1 rounded transition-colors ml-1"
+          <button
+            onClick={() => setShowHelp(true)}
+            className="text-xs bg-amber-400/15 text-amber-300 border border-amber-400/40 hover:bg-amber-400/30 px-2 py-1 rounded transition-colors ml-1 font-bold"
+            title="Kurallar, kartlar ve sık sorulan sorular"
           >
-            Nasıl Oynanır?
+            ❓<span className="hidden sm:inline"> Yardım</span>
           </button>
-          <a 
-            href="/Cumor_Kural_Kitabi.pdf"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-xs bg-blue-500/20 text-blue-400 border border-blue-500/50 hover:bg-blue-500/40 px-2 py-1 rounded transition-colors ml-1 flex items-center gap-1"
-          >
-            📖 El Kitabı
-          </a>
-          {isInGame && (
-            <>
-              <span className="text-gray-500 text-xs">|</span>
-              <span className="text-gray-400 text-xs">{gameStatus}</span>
-              {gameStatus === GameStatus.LOBBY && myId === hostId && players.length > 1 && (
-                <button onClick={handleStartGame} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded text-xs font-bold ml-1">
-                  BAŞLAT 🚀
-                </button>
-              )}
-            </>
-          )}
+          <span className="hidden lg:inline text-gray-400 text-xs">{STATUS_LABELS[gameStatus]?.label ?? gameStatus}</span>
         </div>
 
         {/* ORTA: Oyuncu Skor Tablosu */}
@@ -404,10 +474,11 @@ function App() {
                     ? 'bg-yellow-500/20 border border-yellow-400 text-white shadow-[0_0_8px_rgba(234,179,8,0.3)]'
                     : 'bg-slate-700/40 border border-slate-600/50 text-gray-400'
                     } ${isMe ? 'ring-1 ring-cyan-500/50' : ''}`}
-                  title={`${p.name} - ${p.victoryPoints} VP`}
+                  title={`${p.name} - ${p.victoryPoints} VP${p.disconnected ? ' (bağlantısı koptu)' : ''}`}
                 >
                   <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
-                  <span className="font-semibold truncate max-w-[60px]">{p.name}</span>
+                  <span className={`font-semibold truncate max-w-[60px] ${p.disconnected ? 'line-through opacity-60' : ''}`}>{p.name}</span>
+                  {p.disconnected && <span title="Bağlantısı koptu" aria-label="Bağlantısı koptu">🔌</span>}
                   <span className="text-yellow-400 font-bold">{p.victoryPoints}</span>
                   {hasLongestRoad && <span title="En Uzun Yol (+2 VP)" className="text-[10px]">🛤️</span>}
                   {hasLargestArmy && <span title="Vergi Rekortmeni (+2 VP)" className="text-[10px]">💼</span>}
@@ -463,53 +534,27 @@ function App() {
           </div>
         )}
       </header>
+      )}
 
-      <main className={`flex-1 relative flex items-center justify-center bg-slate-900 ${isInGame ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+      <main className={`flex-1 relative bg-slate-950 ${isInGame ? 'flex items-center justify-center overflow-hidden' : 'overflow-y-auto'}`}>
         {!isInGame && (
-          <div className="z-10 w-full max-w-4xl px-4 flex flex-col items-center gap-4 py-4 md:py-0">
-            {/* Profil Paneli */}
-            <div className="w-full flex justify-end gap-2">
-              <button
-                onClick={() => setShowStore(true)}
-                className="flex items-center gap-2 bg-yellow-600/80 hover:bg-yellow-500 text-white px-3 py-1.5 rounded-lg text-xs transition-colors border border-yellow-600 font-bold"
-              >
-                🛒 Mağaza
-              </button>
-              <button
-                onClick={() => setShowProfile(!showProfile)}
-                className="flex items-center gap-2 bg-slate-700/80 hover:bg-slate-600 text-white px-3 py-1.5 rounded-lg text-xs transition-colors border border-slate-600"
-              >
-                <div className="w-5 h-5 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-[10px] font-bold">
-                  {authUsername.charAt(0).toUpperCase()}
-                </div>
-                {authUsername}
-                {authIsAdmin && <span className="text-red-400 text-[10px]">⭐</span>}
-              </button>
-            </div>
-            {showStore && (
-              <StorePanel
-                userId={authUserId!}
-                token={authToken!}
-                sikke={myProfileData?.sikke || 0}
-                equippedBuilding={myProfileData?.equippedBuilding || 'default'}
-                onUpdate={() => {
-                  // Fetch profile logic is in ProfilePanel, we should ideally lift it up or trigger a reload
-                  // For now, we'll just force a small reload or trust the child will handle its own state
-                  window.dispatchEvent(new Event('reloadProfileData'));
-                }}
-                onClose={() => setShowStore(false)}
-              />
+          <div className="w-full max-w-5xl mx-auto px-4 py-6 md:py-10">
+            {homeTab === 'play' && (
+              <Lobby rooms={rooms} defaultName={authUsername} onCreateRoom={handleCreateRoom} onJoinRoom={handleJoinRoom} />
             )}
-            {showProfile && (
-              <ProfilePanel
+            {homeTab === 'profile' && (
+              <ProfilePanel socketUrl={socketUrl} userId={authUserId!} username={authUsername} isAdmin={authIsAdmin} />
+            )}
+            {homeTab === 'store' && (
+              <StorePanel
                 socketUrl={socketUrl}
                 userId={authUserId!}
-                username={authUsername}
-                isAdmin={authIsAdmin}
-                onLogout={handleLogout}
+                token={authToken!}
+                sikke={myProfileData?.sikke ?? 0}
+                equippedBuilding={myProfileData?.equippedBuilding || 'default'}
+                onUpdate={fetchMyProfile}
               />
             )}
-            <Lobby rooms={rooms} onCreateRoom={handleCreateRoom} onJoinRoom={handleJoinRoom} />
           </div>
         )}
         {isInGame && (
@@ -527,26 +572,31 @@ function App() {
               />
             </div>
 
-            {/* DURUM BİLGİLENDİRMESİ (SETUP & OYUN) */}
-            {isInGame && !hasRolled && (
-              <div className="absolute top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
-                {gameStatus.includes('setup') && isMyTurn && (
-                  <div className="bg-slate-900/80 text-white px-6 py-3 rounded-full border border-yellow-500 shadow-xl backdrop-blur text-xl font-bold animate-bounce">
-                    {turnSubPhase === 'settlement' && "🏠 Bir Köy Yerleştir"}
-                    {turnSubPhase === 'road' && "🛣️ Bir Yol Yerleştir"}
-                  </div>
-                )}
-                {gameStatus.includes('setup') && !isMyTurn && (
-                  <div className="bg-slate-900/60 text-gray-400 px-4 py-2 rounded-full border border-slate-700 backdrop-blur text-sm">
-                    ⏳ {activePlayer?.name} yerleştirme yapıyor...
-                  </div>
-                )}
-                {gameStatus === GameStatus.PLAYING && !isMyTurn && (
-                  <div className="bg-slate-900/60 text-gray-400 px-4 py-2 rounded-full border border-slate-700 backdrop-blur text-sm">
-                    ⏳ {activePlayer?.name} oynuyor...
-                  </div>
-                )}
+            {/* ŞİMDİ NE YAPMALIYIM? (tüm faz ipuçları tek yerde) */}
+            {phaseHint && (
+              <div className="absolute top-3 md:top-4 left-1/2 -translate-x-1/2 z-40 pointer-events-none w-[calc(100vw-1.5rem)] max-w-xl flex justify-center" role="status" aria-live="polite">
+                <div className={`px-4 py-2 rounded-2xl backdrop-blur text-center shadow-xl ${phaseHint.strong
+                  ? 'bg-slate-900/90 border border-amber-400/70 text-white text-sm md:text-base font-semibold'
+                  : 'bg-slate-900/70 border border-slate-700 text-slate-300 text-xs md:text-sm'}`}>
+                  {phaseHint.text}
+                </div>
               </div>
+            )}
+
+            {/* ODA LOBİSİ: oyuncu sayısı, kim başlatır */}
+            {gameStatus === GameStatus.LOBBY && (
+              <WaitingRoom
+                players={players}
+                myId={myId}
+                hostId={hostId}
+                onStart={handleStartGame}
+                onLeave={() => { socket.emit('leave_room'); setIsInGame(false); setGameStatus(GameStatus.LOBBY); }}
+              />
+            )}
+
+            {/* DÜŞEN OYUNCU OYLAMASI */}
+            {disconnectVote && gameStatus !== GameStatus.FINISHED && myId && (
+              <DisconnectVotePanel vote={disconnectVote} players={players} myId={myId} onVote={end => socket.emit('vote_end_game', { end })} />
             )}
 
             {/* (Eski oyuncu listesi kaldırıldı - artık header'da gösteriliyor) */}
@@ -559,8 +609,9 @@ function App() {
 
                   <div className="space-y-2 mb-6">
                     {players.map(p => {
-                      const rollEntry = startRolls.find(r => r.playerId === p.id);
-                      const rollVal = rollEntry?.roll;
+                      // Sunucu her oyuncunun atışlarını dizi olarak gönderir (beraberlikte birden fazla atış)
+                      const rolls = startRolls.find(r => r.playerId === p.id)?.rolls || [];
+                      const rollVal = rolls.length > 0 ? rolls.join(' → ') : null;
                       return (
                         <div key={p.id} className="flex justify-between items-center bg-slate-800/50 px-3 py-2 rounded border border-slate-700">
                           <span className={`${activePlayerId === p.id ? 'text-white' : 'text-gray-400'}`}>{p.name}</span>
@@ -589,7 +640,7 @@ function App() {
             {/* --- KURBAN SEÇİM MODALI --- */}
             {possibleVictims.length > 0 && (
               <div className="absolute inset-0 bg-black/60 z-[60] flex items-center justify-center backdrop-blur-sm">
-                <div className="bg-slate-800 p-8 rounded-2xl border-2 border-red-500 shadow-2xl text-center">
+                <div className="bg-slate-800 p-5 md:p-8 rounded-2xl border-2 border-red-500 shadow-2xl text-center w-[calc(100vw-1.5rem)] max-w-lg">
                   <h2 className="text-2xl font-black text-white mb-4">👮 KİME CEZA KESİLSİN?</h2>
                   <div className="grid grid-cols-2 gap-4">
                     {possibleVictims.map(vId => {
@@ -612,18 +663,25 @@ function App() {
 
             {/* === OYUN SONU MODALI === */}
             {gameStatus === GameStatus.FINISHED && winnerId && (
-              <div className="absolute inset-0 bg-black/80 z-[100] flex items-center justify-center backdrop-blur-md">
-                <div className="bg-gradient-to-b from-yellow-900/90 to-slate-900/90 p-10 rounded-3xl border-4 border-yellow-500 shadow-[0_0_60px_rgba(234,179,8,0.5)] text-center max-w-lg">
+              <div className="absolute inset-0 bg-black/80 z-[100] flex overflow-y-auto p-3 backdrop-blur-md">
+                {/* m-auto + overflow: kısa ekranda pencere kesilmez, kaydırılabilir */}
+                <div className="m-auto w-full bg-gradient-to-b from-yellow-900/90 to-slate-900/90 p-5 md:p-10 rounded-3xl border-4 border-yellow-500 shadow-[0_0_60px_rgba(234,179,8,0.5)] text-center max-w-lg">
                   {/* Konfeti Efekti */}
-                  <div className="text-6xl mb-4 animate-bounce">🏆</div>
+                  <div className="text-5xl md:text-6xl mb-3 md:mb-4 animate-bounce">🏆</div>
 
-                  <h1 className="text-4xl font-black text-yellow-400 mb-2 tracking-wider">
+                  <h1 className="text-3xl md:text-4xl font-black text-yellow-400 mb-2 tracking-wider">
                     OYUN BİTTİ!
                   </h1>
 
-                  <div className="text-2xl text-white font-bold mb-6">
+                  <div className={`text-2xl text-white font-bold ${endReason && endReason !== 'normal' ? 'mb-2' : 'mb-6'}`}>
                     🎉 {players.find(p => p.id === winnerId)?.name} KAZANDI! 🎉
                   </div>
+                  {endReason === 'vote' && (
+                    <p className="text-sm text-slate-300 mb-6">🗳️ Bir oyuncu düştüğü için oyun oylamayla bitirildi; en yüksek puanlı oyuncu kazandı.</p>
+                  )}
+                  {endReason === 'timeout' && (
+                    <p className="text-sm text-slate-300 mb-6">⏱️ Düşen oyuncu 5 dakika içinde dönmediği için oyun bitti; en yüksek puanlı oyuncu kazandı.</p>
+                  )}
 
                   <div className="w-20 h-20 rounded-full mx-auto mb-6 border-4 border-yellow-400 shadow-[0_0_30px_rgba(234,179,8,0.6)]"
                     style={{ backgroundColor: players.find(p => p.id === winnerId)?.color }}>
@@ -633,7 +691,7 @@ function App() {
                   <div className="bg-slate-800/50 rounded-xl p-4 mb-6">
                     <h3 className="text-sm text-gray-400 uppercase font-bold mb-3">SKOR TABLOSU</h3>
                     <div className="space-y-2">
-                      {players
+                      {[...players]
                         .sort((a, b) => b.victoryPoints - a.victoryPoints)
                         .map((p, idx) => (
                           <div key={p.id} className={`flex items-center justify-between px-3 py-2 rounded-lg ${idx === 0 ? 'bg-yellow-500/20' : 'bg-slate-700/30'}`}>
@@ -684,9 +742,17 @@ function App() {
                     </div>
                   </div>
 
-                  <p className="text-gray-400 text-sm">
-                    Yeni oyun için sayfayı yenileyin
-                  </p>
+                  <button
+                    onClick={() => {
+                      socket.emit('leave_room');
+                      setIsInGame(false);
+                      setGameStatus(GameStatus.LOBBY);
+                      fetchMyProfile(); // Kazanılan sikke lobide görünsün
+                    }}
+                    className="w-full bg-yellow-500 hover:bg-yellow-400 text-slate-900 py-3 rounded-lg font-bold transition-colors"
+                  >
+                    Lobiye Dön
+                  </button>
                 </div>
               </div>
             )}
@@ -849,14 +915,6 @@ function App() {
             )}
 
 
-            {/* Bildirim Alanı (Return içinde uygun yere ekle)*/}
-            {isMyTurn && (turnSubPhase as any) === 'sabotage' && (
-              <div className="absolute top-20 left-1/2 -translate-x-1/2 z-50 animate-bounce">
-                <div className="bg-orange-600 text-white px-6 py-4 rounded-full font-black shadow-2xl border-4 border-slate-900 text-xl flex items-center gap-2">
-                  <span>💣</span> YIKILACAK YOLU SEÇ!
-                </div>
-              </div>
-            )}
 
 
 
@@ -869,22 +927,14 @@ function App() {
               onToggle={() => setIsChatOpen(!isChatOpen)}
             />
 
-            {/* ÜCRETSIZ YOL BANNERI (Mühendis kartı) */}
-            {isMyTurn && (turnSubPhase as any) === 'free_road' && (
-              <div className="absolute top-20 left-1/2 -translate-x-1/2 z-50 animate-bounce">
-                <div className="bg-green-600 text-white px-6 py-4 rounded-full font-black shadow-2xl border-4 border-slate-900 text-xl flex items-center gap-2">
-                  <span>🛣️</span> ÜCRETSIZ YOL KOY! (Kalan: {freeRoadsRemaining})
-                </div>
-              </div>
-            )}
 
             {/* TÜCCAR MODALİ: Bankadan kaynak seç */}
             {isMyTurn && ((turnSubPhase as any) === 'trader_pick' || showTraderModal) && (
               <div className="absolute inset-0 bg-black/60 z-[70] flex items-center justify-center backdrop-blur-sm">
-                <div className="bg-slate-800 p-8 rounded-2xl border-2 border-green-500 shadow-2xl text-center">
+                <div className="bg-slate-800 p-5 md:p-8 rounded-2xl border-2 border-green-500 shadow-2xl text-center w-[calc(100vw-1.5rem)] max-w-lg">
                   <h2 className="text-2xl font-black text-white mb-2">📦 Tüccar - Kaynak Seç</h2>
                   <p className="text-gray-400 mb-4">Kalan seçim: {traderPicksRemaining}</p>
-                  <div className="grid grid-cols-5 gap-3">
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 md:gap-3">
                     {[ResourceType.LUMBER, ResourceType.CONCRETE, ResourceType.TEXTILE, ResourceType.FOOD, ResourceType.DIAMOND].map(res => (
                       <button
                         key={res}
@@ -892,11 +942,11 @@ function App() {
                           socket.emit('trader_pick_resource', { resource: res });
                           setShowTraderModal(false);
                         }}
-                        className="bg-slate-700 hover:bg-green-600 text-white p-4 rounded-xl font-bold transition-all border border-slate-600 hover:scale-105 flex flex-col items-center gap-1"
+                        className="bg-slate-700 hover:bg-green-600 text-white p-3 md:p-4 rounded-xl font-bold transition-all border border-slate-600 hover:scale-105 flex flex-col items-center gap-1"
                         title={`${res} al`}
                       >
                         <span className="text-2xl">{res === ResourceType.LUMBER ? '🌲' : res === ResourceType.CONCRETE ? '🧱' : res === ResourceType.TEXTILE ? '🐑' : res === ResourceType.FOOD ? '🌾' : '💎'}</span>
-                        <span className="text-xs">{res}</span>
+                        <span className="text-xs">{RESOURCE_INFO[res].name}</span>
                       </button>
                     ))}
                   </div>
@@ -907,10 +957,10 @@ function App() {
             {/* MERCATOR MODALİ: Kaynak türü seç */}
             {showMercatorModal && (
               <div className="absolute inset-0 bg-black/60 z-[70] flex items-center justify-center backdrop-blur-sm">
-                <div className="bg-slate-800 p-8 rounded-2xl border-2 border-purple-500 shadow-2xl text-center">
+                <div className="bg-slate-800 p-5 md:p-8 rounded-2xl border-2 border-purple-500 shadow-2xl text-center w-[calc(100vw-1.5rem)] max-w-lg">
                   <h2 className="text-2xl font-black text-white mb-2">🌍 Mercator - Kaynak Talep Et</h2>
                   <p className="text-gray-400 mb-4">Her rakipten seçtiğin kaynaktan max 2 alırsın!</p>
-                  <div className="grid grid-cols-5 gap-3">
+                  <div className="grid grid-cols-3 sm:grid-cols-5 gap-2 md:gap-3">
                     {[ResourceType.LUMBER, ResourceType.CONCRETE, ResourceType.TEXTILE, ResourceType.FOOD, ResourceType.DIAMOND].map(res => (
                       <button
                         key={res}
@@ -918,11 +968,11 @@ function App() {
                           socket.emit('play_card', { cardType: DevCardType.MERCATOR, targetResource: res });
                           setShowMercatorModal(false);
                         }}
-                        className="bg-slate-700 hover:bg-purple-600 text-white p-4 rounded-xl font-bold transition-all border border-slate-600 hover:scale-105 flex flex-col items-center gap-1"
+                        className="bg-slate-700 hover:bg-purple-600 text-white p-3 md:p-4 rounded-xl font-bold transition-all border border-slate-600 hover:scale-105 flex flex-col items-center gap-1"
                         title={`${res} talep et`}
                       >
                         <span className="text-2xl">{res === ResourceType.LUMBER ? '🌲' : res === ResourceType.CONCRETE ? '🧱' : res === ResourceType.TEXTILE ? '🐑' : res === ResourceType.FOOD ? '🌾' : '💎'}</span>
-                        <span className="text-xs">{res}</span>
+                        <span className="text-xs">{RESOURCE_INFO[res].name}</span>
                       </button>
                     ))}
                   </div>
@@ -942,7 +992,7 @@ function App() {
                 {/* DESTE BİLGİSİ */}
                 <div className="bg-slate-700/50 p-3 rounded-lg mb-3 flex items-center justify-between">
                   <span className="text-sm text-gray-300">🃏 Destede Kalan Kart:</span>
-                  <span className="text-lg font-bold text-yellow-400">{devCardDeckCount} / 30</span>
+                  <span className="text-lg font-bold text-yellow-400">{devCardDeckCount} / {players.length === 5 ? 45 : 30}</span>
                 </div>
 
                 {/* KAYNAK MİKTARI AYARI */}
@@ -1042,8 +1092,8 @@ function App() {
           </>
         )}
 
-        {/* MOBILE NAVBAR - Sadece mobilde ve oyunda görünür */}
-        {isInGame && (
+        {/* MOBILE NAVBAR - Sadece mobilde ve oyun başladıktan sonra görünür (bekleme odasında anlamsız) */}
+        {isInGame && gameStatus !== GameStatus.LOBBY && (
           <div className="md:hidden fixed bottom-0 left-0 w-full bg-slate-900 border-t border-slate-700 flex justify-around items-center h-16 z-[60] pb-2 safe-area-bottom">
             <button onClick={() => {
               setActiveMobilePanel(activeMobilePanel === 'trade' ? 'none' : 'trade');

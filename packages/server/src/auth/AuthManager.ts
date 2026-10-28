@@ -22,8 +22,9 @@ export class AuthManager {
 
   // KAYIT: Yeni hesap oluştur
   async register(username: string, password: string, email: string): Promise<{ success: boolean; message: string; userId?: string }> {
-    const trimmed = username.trim();
-    if (!trimmed || trimmed.length < 2) throw new Error('Kullanıcı adı en az 2 karakter olmalı!');
+    const trimmed = typeof username === 'string' ? username.trim() : '';
+    // Sadece harf/rakam/_ : e-postadaki HTML enjeksiyonunu ve Supabase .or() filtre enjeksiyonunu kapatır
+    if (!/^[\p{L}\p{N}_]{2,20}$/u.test(trimmed)) throw new Error('Kullanıcı adı 2-20 karakter olmalı ve sadece harf, rakam veya _ içermeli!');
     
     // Şifre gücü kontrolü: En az 8 karakter, harf ve rakam içermeli
     if (!password || password.length < 8) throw new Error('Şifre en az 8 karakter olmalı!');
@@ -82,9 +83,11 @@ export class AuthManager {
     const userId = newUser.id;
 
     // Brevo ile E-posta Gönderme (6 Haneli Kod)
+    // Doğrulama kapalıyken mail atma: işe yaramıyor ve herkes başka birinin adresine bizim adımıza mail attırabiliyordu
+    const EMAIL_VERIFICATION_ENABLED = false; // Doğrulamayı açınca true yap (yukarıdaki is_verified satırlarıyla birlikte)
     const brevoApiKey = process.env.BREVO_API_KEY;
-    
-    if (brevoApiKey) {
+
+    if (EMAIL_VERIFICATION_ENABLED && brevoApiKey) {
         try {
             await fetch('https://api.brevo.com/v3/smtp/email', {
                 method: 'POST',
@@ -113,7 +116,7 @@ export class AuthManager {
         } catch (err) {
             console.error("Brevo Mail Gönderme Hatası:", err);
         }
-    } else {
+    } else if (EMAIL_VERIFICATION_ENABLED) {
         console.warn("⚠️ BREVO_API_KEY bulunamadı. E-posta gönderilemedi.");
     }
 
@@ -124,9 +127,10 @@ export class AuthManager {
   }
 
   // GİRİŞ: Kullanıcı adı VEYA e-posta ile oturum aç
-  async login(username: string, password: string): Promise<{ token: string; userId: string; isAdmin: boolean }> {
+  async login(username: string, password: string): Promise<{ token: string; userId: string; isAdmin: boolean; username: string }> {
+    if (typeof username !== 'string' || typeof password !== 'string') throw new Error('Kullanıcı adı veya şifre hatalı!');
     const trimmed = username.trim().toLowerCase();
-    
+
     // '@' içeriyorsa e-posta ile, içermiyorsa kullanıcı adı ile ara
     const isEmail = trimmed.includes('@');
     const { data: userDoc, error } = await supabase
@@ -135,7 +139,8 @@ export class AuthManager {
         .eq(isEmail ? 'email' : 'username', trimmed)
         .single();
 
-    if (error || !userDoc) throw new Error(isEmail ? 'Bu e-posta ile kayıtlı hesap bulunamadı!' : 'Kullanıcı bulunamadı!');
+    // Tek tip hata: "kullanıcı yok" ile "şifre yanlış" ayrımı kayıtlı kullanıcıları ele veriyordu
+    if (error || !userDoc) throw new Error('Kullanıcı adı veya şifre hatalı!');
 
     // E-posta doğrulama kontrolü iptal edildi
     // if (userDoc.is_verified === false) {
@@ -143,7 +148,7 @@ export class AuthManager {
     // }
 
     const isValid = await bcrypt.compare(password, userDoc.password_hash);
-    if (!isValid) throw new Error('Yanlış şifre!');
+    if (!isValid) throw new Error('Kullanıcı adı veya şifre hatalı!');
 
     // Oturum oluştur
     const token = uuidv4();
@@ -153,7 +158,7 @@ export class AuthManager {
     });
 
     console.log(`✅ Giriş: ${trimmed}`);
-    return { token, userId: userDoc.id, isAdmin: userDoc.is_admin || false };
+    return { token, userId: userDoc.id, isAdmin: userDoc.is_admin || false, username: userDoc.display_name || userDoc.username };
   }
 
   // E-POSTA DOĞRULAMA (6 HANELİ KOD)
@@ -191,31 +196,22 @@ export class AuthManager {
       return true;
   }
   
-  // ŞİFREMİ UNUTTUM
-  async forgotPassword(username: string): Promise<void> {
-      const trimmed = username.trim().toLowerCase();
-      const { data: userDoc } = await supabase.from('profiles').select('email').eq('username', trimmed).single();
-      
-      if (!userDoc) {
-          throw new Error('Kullanıcı bulunamadı!');
-      }
-      
-      // Gerçek bir e-posta gönderme servisi eklenebilir. 
-      // Şimdilik sadece konsola logluyoruz.
-      console.log(`📧 SIFIRLAMA MAILI GÖNDERILECEK: ${userDoc.email}`);
-  }
-
-  // TOKEN DOĞRULAMA: Token geçerli mi kontrol et
+  // TOKEN DOĞRULAMA: Token geçerli mi kontrol et (30 günden eski oturumlar geçersiz)
   async verifyToken(token: string): Promise<{ userId: string; isAdmin: boolean } | null> {
-    if (!token) return null;
-    
+    // sessions.token UUID kolonu: UUID olmayan değer Postgres hatası verir, baştan ele
+    if (typeof token !== 'string' || !/^[0-9a-f-]{36}$/i.test(token)) return null;
+
     const { data: sessionDoc } = await supabase
         .from('sessions')
-        .select('user_id')
+        .select('user_id, created_at')
         .eq('token', token)
         .single();
-        
+
     if (!sessionDoc) return null;
+    if (Date.now() - new Date(sessionDoc.created_at).getTime() > 30 * 24 * 60 * 60 * 1000) {
+        await supabase.from('sessions').delete().eq('token', token);
+        return null;
+    }
 
     const { data: userDoc } = await supabase
         .from('profiles')

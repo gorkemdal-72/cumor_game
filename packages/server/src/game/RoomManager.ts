@@ -11,6 +11,34 @@ const BUILDING_COSTS = {
 
 const CARD_COST = { [ResourceType.DIAMOND]: 1, [ResourceType.TEXTILE]: 1, [ResourceType.FOOD]: 1 };
 
+// İSTEMCİ VERİSİ DOĞRULAMA: socket'ten gelen her şey güvenilmez (bilinmeyen kaynak adı = bedava altın açığıydı)
+const RESOURCE_NAMES_TR: Record<string, string> = {
+  [ResourceType.LUMBER]: 'Kereste', [ResourceType.CONCRETE]: 'Beton', [ResourceType.TEXTILE]: 'Tekstil',
+  [ResourceType.FOOD]: 'Gıda', [ResourceType.DIAMOND]: 'Elmas', [ResourceType.GOLD]: 'Altın',
+};
+const PHYSICAL_RESOURCES = [ResourceType.LUMBER, ResourceType.CONCRETE, ResourceType.TEXTILE, ResourceType.FOOD, ResourceType.DIAMOND];
+const ALL_RESOURCES = [...PHYSICAL_RESOURCES, ResourceType.GOLD];
+
+function assertPhysicalResource(r: unknown): asserts r is ResourceType {
+  if (!PHYSICAL_RESOURCES.includes(r as ResourceType)) throw new Error("Geçersiz kaynak!");
+}
+
+// Takas miktarlarını tam bir kayda çevirir; negatif/kesirli/bilinmeyen değerleri reddeder
+function parseAmounts(input: unknown, allowNegative = false): Record<ResourceType, number> {
+  const out = Object.fromEntries(ALL_RESOURCES.map(r => [r, 0])) as Record<ResourceType, number>;
+  if (!input || typeof input !== 'object') throw new Error("Geçersiz miktar!");
+  for (const [key, value] of Object.entries(input)) {
+    if (!ALL_RESOURCES.includes(key as ResourceType)) throw new Error("Geçersiz kaynak!");
+    if (!Number.isInteger(value) || (!allowNegative && (value as number) < 0) || Math.abs(value as number) > 1000) throw new Error("Geçersiz miktar!");
+    out[key as ResourceType] = value as number;
+  }
+  return out;
+}
+
+function hasResources(player: { resources: Record<ResourceType, number> }, amounts: Record<ResourceType, number>) {
+  return ALL_RESOURCES.every(r => player.resources[r] >= amounts[r]);
+}
+
 function shuffle<T>(array: T[]): T[] {
   for (let i = array.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -138,6 +166,9 @@ export class RoomManager {
   addPlayer(id: string, name: string, color: PlayerColor, userId?: string, equippedBuilding: string = 'default') {
     if (this.room.status !== GameStatus.LOBBY) throw new Error("Oyun başladı, giriş yapılamaz!");
     if (this.room.players.length >= 5) throw new Error("Oda dolu! (Maks 5 kişi)");
+    name = typeof name === 'string' ? name.trim().slice(0, 20) : '';
+    if (!name) throw new Error("Takma ad gerekli!");
+    if (!Object.values(PlayerColor).includes(color)) throw new Error("Geçersiz renk!");
     if (this.room.players.some(p => p.name.toLowerCase() === name.toLowerCase())) throw new Error("İsim alınmış.");
     if (this.room.players.some(p => p.color === color)) throw new Error("Renk alınmış.");
 
@@ -170,15 +201,55 @@ export class RoomManager {
     const player = this.room.players.find(p => p.id === socketId);
     if (!player) return false;
 
-    // Lobideyse direkt sil
-    if (this.room.status === GameStatus.LOBBY) {
+    // Lobideyse veya oyun bittiyse direkt sil (bitmiş oyunda beklemenin anlamı yok, oda boşalınca silinir)
+    if (this.room.status === GameStatus.LOBBY || this.room.status === GameStatus.FINISHED) {
       this.removePlayer(socketId);
       return true;
     }
 
-    // Oyun sırasında: silme, işaretle
-    (player as any).disconnected = true;
+    // Oyun sırasında: silme, işaretle. Sıra GEÇMEZ (oyunun dengesini bozar); bağlı oyuncular bitirmek için oylar
+    player.disconnected = true;
+    if (!this.room.disconnectVote) {
+      this.room.disconnectVote = { endVotes: [], deadline: Date.now() + RoomManager.DISCONNECT_TIMEOUT_MS };
+    }
     return false; // false = oyuncu silinmedi, reconnect beklenecek
+  }
+
+  static DISCONNECT_TIMEOUT_MS = 5 * 60 * 1000;
+
+  // DÜŞEN OYUNCU OYLAMASI: bağlı oyuncuların çoğunluğu "bitir" derse oyun biter, en yüksek puanlı kazanır
+  castDisconnectVote(playerId: string, end: boolean): boolean {
+    const vote = this.room.disconnectVote;
+    if (!vote) throw new Error("Şu an oylama yok.");
+    const voter = this.room.players.find(p => p.id === playerId);
+    if (!voter || voter.disconnected) throw new Error("Oy veremezsin.");
+
+    vote.endVotes = vote.endVotes.filter(id => id !== playerId);
+    if (end) vote.endVotes.push(playerId);
+
+    if (vote.endVotes.length >= this.endVotesNeeded()) {
+      this.endGameByHighestScore('vote');
+      return true;
+    }
+    return false;
+  }
+
+  // Bağlı oyuncuların salt çoğunluğu (2 bağlıda 2, 3'te 2, 4'te 3)
+  endVotesNeeded() {
+    const connected = this.room.players.filter(p => !p.disconnected).length;
+    return Math.floor(connected / 2) + 1;
+  }
+
+  // Oyunu en yüksek puanlı oyuncunun galibiyetiyle bitir (eşitlikte sırada önce gelen)
+  endGameByHighestScore(reason: 'vote' | 'timeout') {
+    this.updateAllVictoryPoints();
+    const winner = this.room.players.reduce((best, p) => (p.victoryPoints > best.victoryPoints ? p : best));
+    this.room.winnerId = winner.id;
+    this.room.status = GameStatus.FINISHED;
+    this.room.endReason = reason;
+    this.room.activePlayerId = null;
+    this.room.currentTradeOffer = null;
+    this.room.disconnectVote = null;
   }
 
   // OYUNCU RECONNECT: userId ile eski oyuncuyu bul, yeni socket ID ata
@@ -188,7 +259,14 @@ export class RoomManager {
 
     const oldId = player.id;
     player.id = newSocketId;
-    (player as any).disconnected = false;
+    player.disconnected = false;
+
+    // Oylama: oy veren yenilediyse oyu yeni id'ye taşı; kimse kopuk değilse oylama biter
+    const vote = this.room.disconnectVote;
+    if (vote) {
+      vote.endVotes = vote.endVotes.map(id => id === oldId ? newSocketId : id);
+      if (!this.room.players.some(p => p.disconnected)) this.room.disconnectVote = null;
+    }
 
     // Host ID güncelle
     if (this.room.hostId === oldId) {
@@ -249,6 +327,7 @@ export class RoomManager {
   tradeWithBank(playerId: string, sellResource: ResourceType) {
     if (this.room.activePlayerId !== playerId) throw new Error("Sıra sende değil! İhracat yapmak için sıranı bekle.");
     if (!this.hasRolled) throw new Error("Önce zar atmalısın!");
+    assertPhysicalResource(sellResource);
     const player = this.room.players.find(p => p.id === playerId);
     if (!player) throw new Error("Oyuncu yok");
     if (player.resources[sellResource] < 1) throw new Error("Yetersiz Kaynak!");
@@ -267,6 +346,7 @@ export class RoomManager {
     if (this.room.turnSubPhase !== 'waiting') {
       throw new Error("Şu an ticaret yapamazsın.");
     }
+    assertPhysicalResource(resource);
 
     const player = this.room.players.find(p => p.id === playerId);
     if (!player) throw new Error("Oyuncu bulunamadı.");
@@ -394,6 +474,7 @@ export class RoomManager {
   // targetResource parametresi Mercator kartı için kullanılır (hangi kaynak isteniyor)
   playDevelopmentCard(playerId: string, cardType: DevCardType, targetResource?: ResourceType) {
     if (this.room.activePlayerId !== playerId) throw new Error("Sıra sende değil!");
+    if (!Object.values(DevCardType).includes(cardType)) throw new Error("Geçersiz kart!");
 
     const player = this.room.players.find(p => p.id === playerId);
     if (!player) throw new Error("Oyuncu bulunamadı");
@@ -452,7 +533,7 @@ export class RoomManager {
       case DevCardType.MERCATOR:
         // MERCATOR: Bir kaynak türü söyle, her rakipten o kaynaktan MAX 2 al
         // Rakipte 0 varsa → 2 Altın ceza, 1 varsa → 1 kaynak + 1 Altın ceza, 2+ varsa → 2 kaynak
-        if (!targetResource || targetResource === ResourceType.GOLD) {
+        if (!PHYSICAL_RESOURCES.includes(targetResource as ResourceType)) {
           // Kartı geri koy (henüz oynanmadı)
           player.devCards[cardType]++;
           throw new Error("Geçerli bir kaynak türü seçmelisin! (Altın hariç)");
@@ -587,30 +668,14 @@ export class RoomManager {
   }
 
   // --- P2P TİCARET ---
-  createP2PTrade(playerId: string, give: Record<ResourceType, number>, want: Record<ResourceType, number>) {
+  createP2PTrade(playerId: string, rawGive: unknown, rawWant: unknown) {
     if (this.room.activePlayerId !== playerId) throw new Error("Sıra sende değil!");
     const player = this.room.players.find(p => p.id === playerId);
     if (!player) throw new Error("Oyuncu yok");
 
-    // CHEAT CODE: 7 Kereste/Tekstil/Elmas, 2 Beton/Gıda/Altın İSTE, Hiçbir şey VERME -> +5 ALTIN
-    const isCheat =
-      Object.values(give).every(v => v === 0) &&
-      want[ResourceType.LUMBER] === 7 &&
-      want[ResourceType.TEXTILE] === 7 &&
-      want[ResourceType.DIAMOND] === 7 &&
-      want[ResourceType.CONCRETE] === 2 &&
-      want[ResourceType.FOOD] === 2 &&
-      want[ResourceType.GOLD] === 2;
-
-    if (isCheat) {
-      player.resources[ResourceType.GOLD] += 5;
-      return; // Ticaret oluşturma, sadece hile yap
-    }
-
-    for (const res in give) {
-      const r = res as ResourceType;
-      if (give[r] > 0 && player.resources[r] < give[r]) throw new Error(`Yetersiz kaynak: ${r}`);
-    }
+    const give = parseAmounts(rawGive);
+    const want = parseAmounts(rawWant);
+    if (!hasResources(player, give)) throw new Error("Teklif ettiğin kaynaklar sende yok!");
     this.room.currentTradeOffer = { id: Math.random().toString(36).substr(2, 9), offererId: playerId, give, want, acceptors: [] };
   }
 
@@ -635,6 +700,9 @@ export class RoomManager {
     const offerer = this.room.players.find(p => p.id === offererId);
     const partner = this.room.players.find(p => p.id === partnerId);
     if (!offerer || !partner) throw new Error("Oyuncular bulunamadı.");
+    // Teklif/kabul sonrası kaynak harcanmış olabilir: iki tarafı tekrar kontrol et (yoksa eksiye düşülüyordu)
+    if (!hasResources(offerer, offer.give)) throw new Error("Teklif ettiğin kaynaklar artık sende yok!");
+    if (!hasResources(partner, offer.want)) throw new Error(`${partner.name} artık istenen kaynaklara sahip değil!`);
 
     offerer.gameStats.tradesMade++;
     partner.gameStats.tradesMade++;
@@ -973,25 +1041,34 @@ export class RoomManager {
       }
     }
 
-    // Kartel kontrolü: Sıra kartel sahibine gelirse kartel biter
-    const idx = this.room.players.findIndex(p => p.id === playerId);
-    const nextPlayerId = this.room.players[(idx + 1) % this.room.players.length].id;
-
-    if (this.room.activeCartelPlayerId && this.room.activeCartelPlayerId === nextPlayerId) {
-      this.room.activeCartelPlayerId = null;
-    }
-
-    this.room.activePlayerId = nextPlayerId;
-    this.room.turnSubPhase = 'waiting';
-    this.hasRolled = false; // Yeni tur için zar atılmadı
-
-    // --- KAZANMA KONTROLÜ ---
+    // --- KAZANMA KONTROLÜ (sadece turunu bitiren oyuncu kazanabilir; başkasının turunda kazanılmaz) ---
     this.updateAllVictoryPoints();
-    const winner = this.checkWinCondition();
-    if (winner) {
-      this.room.winnerId = winner;
+    if (player && player.victoryPoints >= 10) {
+      this.room.winnerId = player.id;
       this.room.status = GameStatus.FINISHED;
+      this.room.endReason = 'normal';
+      this.room.activePlayerId = null; // Oyun bitti: "sıra sende" kontrolleri tüm hamleleri engeller
+      this.room.currentTradeOffer = null;
+      return;
     }
+
+    const idx = this.room.players.findIndex(p => p.id === playerId);
+    this.passTurnFrom(idx + 1);
+  }
+
+  // Sırayı startIdx'teki oyuncuya ver. Kopan oyuncunun sırası atlanmaz: oyun oylama/geri dönüşle çözülür
+  private passTurnFrom(startIdx: number) {
+    const players = this.room.players;
+    if (players.length === 0) { this.room.activePlayerId = null; return; }
+    const next = players[startIdx % players.length];
+
+    // Kartel kontrolü: Sıra kartel sahibine gelirse kartel biter
+    if (this.room.activeCartelPlayerId === next.id) this.room.activeCartelPlayerId = null;
+
+    this.room.activePlayerId = next.id;
+    this.room.turnSubPhase = 'waiting';
+    this.room.currentTradeOffer = null; // Teklif sadece veren oyuncunun turunda geçerli
+    this.hasRolled = false; // Yeni tur için zar atılmadı
   }
 
   // === CUMOR: ZAFER PUANI SİSTEMİ ===
@@ -1051,17 +1128,10 @@ export class RoomManager {
     const purchasedVPs = (player as any).purchasedVPs || 0;
     vp += purchasedVPs;
 
-    return vp;
-  }
+    // 8. Admin düzeltmesi (adminSetVP; yeniden hesaplamada ezilmesin diye fark olarak tutulur)
+    vp += (player as any).adminVPBonus || 0;
 
-  // Kazanan var mı kontrol et
-  private checkWinCondition(): string | null {
-    for (const player of this.room.players) {
-      if (player.victoryPoints >= 10) {
-        return player.id;
-      }
-    }
-    return null;
+    return vp;
   }
 
   // === EN UZUN YOL HESAPLAMA ===
@@ -1266,7 +1336,11 @@ export class RoomManager {
   private chargePlayer(playerId: string, cost: any) {
     const p = this.room.players.find(player => player.id === playerId);
     if (!p) throw new Error("Oyuncu yok!");
-    Object.entries(cost).forEach(([res, amt]) => { if (p.resources[res as ResourceType] < (amt as number)) throw new Error("Yetersiz Kaynak!"); });
+    // Eksik olanı söyle: "Yetersiz kaynak!" yerine "1 Beton, 2 Elmas eksik"
+    const missing = Object.entries(cost)
+      .filter(([res, amt]) => p.resources[res as ResourceType] < (amt as number))
+      .map(([res, amt]) => `${(amt as number) - p.resources[res as ResourceType]} ${RESOURCE_NAMES_TR[res] ?? res}`);
+    if (missing.length) throw new Error(`Yetersiz kaynak: ${missing.join(', ')} eksik.`);
     Object.entries(cost).forEach(([res, amt]) => p.resources[res as ResourceType] -= (amt as number));
   }
   private giveInitialResources(playerId: string, coords: { q: number, r: number, vertexIndex: number }) {
@@ -1416,8 +1490,21 @@ export class RoomManager {
 
   // ODA BİLGİSİ: Lobby'de gösterilen oda bilgisi (maxPlayers 5'e çıkarıldı)
   getRoomInfo(): RoomInfo { return { id: this.room.id, name: this.name, playerCount: this.room.players.length, maxPlayers: 5, isLocked: !!this.password, status: this.room.status }; }
-  getGameState() { return { ...this.room, devCardDeckCount: this.devCardDeck.length, hasRolled: this.hasRolled }; }
-  removePlayer(id: string) { this.room.players = this.room.players.filter(p => p.id !== id); }
+  getGameState() {
+    // VP'yi her durumda güncel göster (eskiden sadece tur sonunda hesaplanıyordu); kazanma kontrolü yine endTurn'de
+    if (this.room.status === GameStatus.PLAYING) this.updateAllVictoryPoints();
+    return { ...this.room, devCardDeckCount: this.devCardDeck.length, hasRolled: this.hasRolled };
+  }
+  removePlayer(id: string) {
+    const idx = this.room.players.findIndex(p => p.id === id);
+    if (idx === -1) return;
+    this.room.players.splice(idx, 1);
+    if (this.room.hostId === id) this.room.hostId = this.room.players[0]?.id ?? null; // Host ayrılınca odada kalan ilk kişi host olur
+    if (this.room.currentTradeOffer?.offererId === id) this.room.currentTradeOffer = null;
+    // Sıradaki oyuncu çıkarsa oyun hayalet oyuncuda kilitleniyordu: sırayı bir sonrakine ver
+    // shortcut: kurulum ve başlangıç zarı aşamasında çıkan oyuncu sırayı yine bozabilir, gerekirse o fazlar için ayrı ele al
+    if (this.room.activePlayerId === id && this.room.status === GameStatus.PLAYING) this.passTurnFrom(idx);
+  }
   isEmpty() { return this.room.players.length === 0; }
 
   // BAN SİSTEMİ
@@ -1430,14 +1517,8 @@ export class RoomManager {
     if (!target) throw new Error("Oyuncu bulunamadı!");
 
     this.bannedIds.add(targetId);
-    this.room.players = this.room.players.filter(p => p.id !== targetId);
-
-    // Eğer atılan oyuncu aktif oyuncuysa, sırayı değiştir
-    if (this.room.activePlayerId === targetId && this.room.players.length > 0) {
-      const currentIndex = 0; // İlk oyuncuya geç
-      this.room.activePlayerId = this.room.players[currentIndex].id;
-      this.room.turnSubPhase = 'waiting';
-    }
+    if (target.userId) this.bannedIds.add(target.userId); // Sayfayı yenileyip (yeni socket id ile) geri girmesin
+    this.removePlayer(targetId); // Aktif oyuncuysa sıra bir sonrakine geçer
 
     return target.name;
   }
@@ -1451,6 +1532,7 @@ export class RoomManager {
     if (this.room.activePlayerId !== playerId) throw new Error("Sıra sende değil!");
     if ((this.room.turnSubPhase as any) !== 'trader_pick') throw new Error("Tüccar modu aktif değil!");
     if (resource === ResourceType.GOLD) throw new Error("Tüccar ile Altın seçemezsin!");
+    assertPhysicalResource(resource);
 
     const player = this.room.players.find(p => p.id === playerId);
     if (!player) throw new Error("Oyuncu bulunamadı");
@@ -1468,20 +1550,20 @@ export class RoomManager {
     return `+1 ${resource} alındı! Kalan seçim: ${this.room.traderPicksRemaining}`;
   }
 
-  // === ADMİN ÖZELLİKLERİ (SADECE HOST) ===
+  // === ADMİN ÖZELLİKLERİ ===
+  // GÜVENLİK: Yetki kontrolü app.ts'de (sadece hesap adminleri; oda sahibi DEĞİL — host'a açıkken herkes sikke kasabiliyordu)
   // Admin kaynak ekleme/silme: Belirtilen oyuncuya kaynak ekler veya siler
-  // GÜVENLİK: Sadece host kullanabilir
-  adminGiveResources(requesterId: string, targetId: string, resources: Partial<Record<ResourceType, number>>): string {
-    if (requesterId !== this.room.hostId) throw new Error("Sadece Host bu komutu kullanabilir!");
+  adminGiveResources(targetId: string, rawResources: unknown): string {
     const target = this.room.players.find(p => p.id === targetId);
     if (!target) throw new Error("Oyuncu bulunamadı!");
+    const resources = parseAmounts(rawResources, true);
 
     let isRemove = false;
     // Her kaynak için miktarları ekle veya sil
-    for (const [res, amount] of Object.entries(resources)) {
-      if (amount && amount !== 0) {
-        const current = target.resources[res as ResourceType] || 0;
-        target.resources[res as ResourceType] = Math.max(0, current + amount);
+    for (const res of ALL_RESOURCES) {
+      const amount = resources[res];
+      if (amount !== 0) {
+        target.resources[res] = Math.max(0, target.resources[res] + amount);
         if (amount < 0) isRemove = true;
       }
     }
@@ -1490,12 +1572,15 @@ export class RoomManager {
   }
 
   // Admin VP ayarlama: Belirtilen oyuncunun VP puanını ayarlar
-  adminSetVP(requesterId: string, targetId: string, vp: number): string {
-    if (requesterId !== this.room.hostId) throw new Error("Sadece Host bu komutu kullanabilir!");
+  adminSetVP(targetId: string, vp: unknown): string {
     const target = this.room.players.find(p => p.id === targetId);
     if (!target) throw new Error("Oyuncu bulunamadı!");
+    if (!Number.isInteger(vp)) throw new Error("Geçersiz VP!");
 
-    target.victoryPoints = Math.max(0, vp);
+    const t = target as any;
+    const withoutBonus = this.calculateVictoryPoints(targetId) - (t.adminVPBonus || 0);
+    t.adminVPBonus = Math.max(0, vp as number) - withoutBonus;
+    target.victoryPoints = withoutBonus + t.adminVPBonus;
     return `Admin: ${target.name} VP=${vp} olarak ayarlandı.`;
   }
 }

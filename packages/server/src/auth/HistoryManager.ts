@@ -34,17 +34,10 @@ export class HistoryManager {
     async saveGameResult(
         roomName: string,
         players: GameHistoryPlayer[],
-        winnerId: string,
+        winnerId: string | null, // null = kazanan misafir
         winnerName: string,
         durationMinutes: number
     ): Promise<void> {
-        
-        // winnerId kontrolü - boş veya geçersiz ise kaydetme
-        if (!winnerId || winnerId.trim() === '') {
-            console.warn("⚠️ Kazanan ID'si boş, oyun geçmişi kaydedilmedi.");
-            return;
-        }
-
         // Önce game_history tablosuna oyunu ekle
         const { data: game, error } = await supabase.from('game_history').insert({
             room_name: roomName,
@@ -53,10 +46,7 @@ export class HistoryManager {
             duration_minutes: durationMinutes
         }).select('id').single();
 
-        if (error || !game) {
-            console.error("Supabase Game History Save Error:", error);
-            return;
-        }
+        if (error || !game) throw new Error(`game_history kaydedilemedi: ${error?.message}`);
 
         // Sonra game_history_players tablosuna oyuncuları ekle
         const playersData = players.map(p => ({
@@ -71,27 +61,28 @@ export class HistoryManager {
             trades_made: p.gameStats?.tradesMade || 0
         }));
 
-        await supabase.from('game_history_players').insert(playersData);
+        const { error: playersError } = await supabase.from('game_history_players').insert(playersData);
+        if (playersError) throw new Error(`game_history_players kaydedilemedi: ${playersError.message}`);
 
         console.log(`📜 Oyun geçmişi kaydedildi: ${winnerName} kazandı! (${durationMinutes} dk)`);
     }
 
     // KULLANICININ OYUN GEÇMİŞİ (son 20)
     async getUserHistory(userId: string): Promise<GameHistoryEntry[]> {
-        // Hangi oyunlarda oynadığını bul
-        const { data: userGames } = await supabase
+        // Hangi oyunlarda oynadığını bul (id UUID olduğu için sıralama/limit tarihe göre 2. sorguda yapılır)
+        // shortcut: tüm oyun id'leri URL'e gidiyor, kullanıcı başına yüzlerce oyun olursa tek sorguluk RPC'ye geç
+        const { data: userGames, error: userGamesError } = await supabase
             .from('game_history_players')
             .select('game_id')
-            .eq('user_id', userId)
-            .order('id', { ascending: false })
-            .limit(20);
+            .eq('user_id', userId);
 
+        if (userGamesError) throw new Error(userGamesError.message);
         if (!userGames || userGames.length === 0) return [];
 
         const gameIds = userGames.map(ug => ug.game_id);
 
-        // Bu oyunların detaylarını ve tüm oyuncularını çek
-        const { data: gamesData } = await supabase
+        // Bu oyunların detaylarını ve tüm oyuncularını çek (en yeni 20)
+        const { data: gamesData, error: gamesError } = await supabase
             .from('game_history')
             .select(`
                 id,
@@ -112,8 +103,10 @@ export class HistoryManager {
                 )
             `)
             .in('id', gameIds)
-            .order('date', { ascending: false });
+            .order('date', { ascending: false })
+            .limit(20);
 
+        if (gamesError) throw new Error(gamesError.message);
         if (!gamesData) return [];
 
         return gamesData.map((g: any) => ({
