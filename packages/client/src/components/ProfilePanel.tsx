@@ -37,6 +37,7 @@ interface UserProfile {
     awardGaddar?: number;
     awardSanssiz?: number;
     awardBorsa?: number;
+    sikke?: number;
 }
 
 const PLACE_STYLES = ['bg-amber-400/20 text-amber-300', 'bg-slate-300/15 text-slate-200', 'bg-orange-700/25 text-orange-300'];
@@ -66,6 +67,7 @@ export function ProfilePanel({ socketUrl, userId, username, isAdmin }: ProfilePa
     const [searchQuery, setSearchQuery] = useState('');
     const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
     const [adminMsg, setAdminMsg] = useState('');
+    const [giftAmount, setGiftAmount] = useState('50');
     const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
 
     useEffect(() => {
@@ -91,6 +93,20 @@ export function ProfilePanel({ socketUrl, userId, username, isAdmin }: ProfilePa
         const data = await res.json();
         if (data.success) setSearchResults(data.users);
         else setAdminMsg(data.message);
+    };
+
+    const giveSikke = async (target: UserProfile) => {
+        const amount = Number(giftAmount);
+        if (!Number.isInteger(amount) || amount < 1) { setAdminMsg('Geçerli bir sikke miktarı gir (1 veya daha fazla).'); return; }
+        if (!confirm(`${target.username} kullanıcısına ${amount} sikke gönderilsin mi?`)) return;
+        const res = await fetch(`${socketUrl}/api/admin/give-sikke`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: localStorage.getItem('cumor_token'), targetUserId: target.id, amount })
+        });
+        const data = await res.json();
+        setAdminMsg(data.success ? `${target.username}: ${data.message}` : data.message);
+        if (data.success) searchUsers();
     };
 
     const toggleAdmin = async (targetId: string, makeAdmin: boolean) => {
@@ -247,17 +263,29 @@ export function ProfilePanel({ socketUrl, userId, username, isAdmin }: ProfilePa
                                 placeholder="Kullanıcı adı ara…" className="input" aria-label="Kullanıcı adı ara" />
                             <button type="submit" className="btn btn-secondary">Ara</button>
                         </form>
+                        {searchResults.length > 0 && (
+                            <div className="flex items-center gap-2 text-sm">
+                                <label htmlFor="gift-amount" className="text-slate-300 shrink-0">Hediye sikke miktarı:</label>
+                                <input id="gift-amount" type="number" min={1} max={100000} value={giftAmount}
+                                    onChange={e => setGiftAmount(e.target.value)} className="input !py-1.5 !w-28" />
+                            </div>
+                        )}
                         <ul className="space-y-1.5">
                             {searchResults.map(u => (
-                                <li key={u.id} className="flex items-center justify-between bg-slate-900/50 p-2.5 rounded-lg text-sm">
+                                <li key={u.id} className="flex flex-wrap items-center justify-between gap-2 bg-slate-900/50 p-2.5 rounded-lg text-sm">
                                     <span>
                                         <span className="text-white font-bold">{u.username}</span>
                                         {u.isAdmin && <span className="badge bg-red-500/15 text-red-400 ml-2">ADMİN</span>}
-                                        <span className="text-slate-500 ml-2">{u.gamesPlayed} oyun</span>
+                                        <span className="text-slate-500 ml-2">{u.gamesPlayed} oyun · 💰 {u.sikke ?? 0}</span>
                                     </span>
-                                    <button onClick={() => toggleAdmin(u.id, !u.isAdmin)} className={`btn !py-1 !px-2.5 text-xs ${u.isAdmin ? 'bg-red-500/15 text-red-400 hover:bg-red-500/30' : 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/30'}`}>
-                                        {u.isAdmin ? 'Admin kaldır' : 'Admin yap'}
-                                    </button>
+                                    <span className="flex gap-1.5">
+                                        <button onClick={() => giveSikke(u)} className="btn !py-1 !px-2.5 text-xs bg-amber-400/15 text-amber-300 hover:bg-amber-400/30">
+                                            💰 Sikke gönder
+                                        </button>
+                                        <button onClick={() => toggleAdmin(u.id, !u.isAdmin)} className={`btn !py-1 !px-2.5 text-xs ${u.isAdmin ? 'bg-red-500/15 text-red-400 hover:bg-red-500/30' : 'bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/30'}`}>
+                                            {u.isAdmin ? 'Admin kaldır' : 'Admin yap'}
+                                        </button>
+                                    </span>
                                 </li>
                             ))}
                         </ul>

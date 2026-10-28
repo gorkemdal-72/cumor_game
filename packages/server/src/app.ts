@@ -177,7 +177,7 @@ app.post('/api/store/buy', async (req, res) => {
       p_user_id: auth.userId,
       p_cosmetic_id: item.id,
       p_cosmetic_type: item.type,
-      p_price: item.price
+      p_price: auth.isAdmin ? 0 : item.price // Admin: sınırsız sikke, her şey ücretsiz
     });
     if (buyError) throw new Error(buyError.message || "Satın alma başarısız.");
 
@@ -204,6 +204,23 @@ app.post('/api/user/equip', async (req, res) => {
     }
 
     res.json({ success: true, message: 'Tasarım kuşanıldı!' });
+  } catch (e: any) {
+    res.status(400).json({ success: false, message: e.message });
+  }
+});
+
+// ADMİN: Kullanıcıya sikke hediye et (supabase_admin_sikke.sql → add_sikke)
+app.post('/api/admin/give-sikke', async (req, res) => {
+  try {
+    const { token, targetUserId, amount } = req.body;
+    const auth = await authManager.verifyToken(token);
+    if (!auth?.isAdmin) return res.status(403).json({ success: false, message: 'Admin yetkisi gerekli' });
+    if (typeof targetUserId !== 'string' || !targetUserId) throw new Error('Kullanıcı seçilmedi.');
+    if (!Number.isInteger(amount) || amount < 1 || amount > 100000) throw new Error('Miktar 1 ile 100000 arasında tam sayı olmalı.');
+
+    const { data: newBalance, error } = await supabase.rpc('add_sikke', { p_user_id: targetUserId, p_amount: amount });
+    if (error) throw new Error(error.message);
+    res.json({ success: true, message: `${amount} sikke gönderildi! Yeni bakiye: ${newBalance}`, newBalance });
   } catch (e: any) {
     res.status(400).json({ success: false, message: e.message });
   }

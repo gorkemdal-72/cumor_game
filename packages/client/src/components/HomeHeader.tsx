@@ -52,7 +52,7 @@ export function HomeHeader({ tab, onTabChange, username, isAdmin, sikke, isConne
           </a>
           {sikke !== null && (
             <span className="badge bg-amber-400/15 text-amber-300 border border-amber-400/30 !text-xs !py-1" title="Sikke bakiyen">
-              💰 {sikke}
+              💰 {isAdmin ? '∞' : sikke}
             </span>
           )}
           <span className="hidden sm:flex items-center gap-2 text-sm font-semibold text-slate-200">

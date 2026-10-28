@@ -551,6 +551,7 @@ function App() {
                 userId={authUserId!}
                 token={authToken!}
                 sikke={myProfileData?.sikke ?? 0}
+                isAdmin={authIsAdmin}
                 equippedBuilding={myProfileData?.equippedBuilding || 'default'}
                 onUpdate={fetchMyProfile}
               />

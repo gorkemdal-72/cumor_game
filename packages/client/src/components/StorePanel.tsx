@@ -9,6 +9,7 @@ interface StorePanelProps {
   userId: string;
   token: string;
   sikke: number;
+  isAdmin?: boolean; // Admin: sınırsız sikke, her şey ücretsiz
   equippedBuilding: string;
   onUpdate: () => void;
 }
@@ -26,7 +27,7 @@ function DesignPreview({ design }: { design: string }) {
   );
 }
 
-export function StorePanel({ socketUrl, userId, token, sikke, equippedBuilding, onUpdate }: StorePanelProps) {
+export function StorePanel({ socketUrl, userId, token, sikke, isAdmin = false, equippedBuilding, onUpdate }: StorePanelProps) {
   const [ownedIds, setOwnedIds] = useState<string[] | null>(null);
   const [confirmItem, setConfirmItem] = useState<CosmeticItem | null>(null);
   const [busy, setBusy] = useState(false);
@@ -80,7 +81,7 @@ export function StorePanel({ socketUrl, userId, token, sikke, equippedBuilding, 
           <p className="text-sm text-slate-400 mt-1">Binalarının görünüşünü değiştir. Her oyun sikke kazandırır: galibiyet 10, katılım 2.</p>
         </div>
         <div className="badge bg-amber-400/15 text-amber-300 border border-amber-400/30 !text-base !px-4 !py-2 self-start sm:self-auto">
-          💰 {sikke} Sikke
+          💰 {isAdmin ? '∞ Sikke (Admin)' : `${sikke} Sikke`}
         </div>
       </section>
 
@@ -91,7 +92,7 @@ export function StorePanel({ socketUrl, userId, token, sikke, equippedBuilding, 
           {COSMETICS_CATALOG.filter(c => c.type === 'building').map(item => {
             const isOwned = item.id === 'default' || ownedIds.includes(item.id);
             const isEquipped = equippedBuilding === item.id;
-            const canAfford = sikke >= item.price;
+            const canAfford = isAdmin || sikke >= item.price;
 
             return (
               <article key={item.id} className={`card p-4 flex flex-col ${isEquipped ? '!border-emerald-500/70' : ''}`}>
@@ -114,7 +115,7 @@ export function StorePanel({ socketUrl, userId, token, sikke, equippedBuilding, 
                 ) : (
                   <button onClick={() => setConfirmItem(item)} disabled={!canAfford || busy} className="btn btn-primary w-full"
                     title={canAfford ? undefined : `${item.price - sikke} sikke daha gerekiyor`}>
-                    {canAfford ? `Satın al · ${item.price} 💰` : `${item.price} 💰 · ${item.price - sikke} eksik`}
+                    {isAdmin ? 'Ücretsiz al (Admin)' : canAfford ? `Satın al · ${item.price} 💰` : `${item.price} 💰 · ${item.price - sikke} eksik`}
                   </button>
                 )}
               </article>
@@ -136,9 +137,9 @@ export function StorePanel({ socketUrl, userId, token, sikke, equippedBuilding, 
           }
         >
           <p className="text-slate-300">
-            <strong className="text-white">{confirmItem.name}</strong> tasarımını <strong className="text-amber-300">{confirmItem.price} sikke</strong> karşılığında almak istiyor musun?
+            <strong className="text-white">{confirmItem.name}</strong> tasarımını <strong className="text-amber-300">{isAdmin ? 'ücretsiz (admin)' : `${confirmItem.price} sikke`}</strong> olarak almak istiyor musun?
           </p>
-          <p className="text-sm text-slate-500 mt-2">Kalan bakiye: {sikke - confirmItem.price} sikke</p>
+          {!isAdmin && <p className="text-sm text-slate-500 mt-2">Kalan bakiye: {sikke - confirmItem.price} sikke</p>}
         </Modal>
       )}
     </div>
