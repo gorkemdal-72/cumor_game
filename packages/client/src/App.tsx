@@ -16,6 +16,7 @@ import { StorePanel } from './components/StorePanel';
 import { HomeHeader, type HomeTab } from './components/HomeHeader';
 import { STATUS_LABELS } from './components/Lobby';
 import { GameHelpPanel } from './components/GameHelpPanel';
+import { Modal } from './components/Modal';
 import { DisconnectVotePanel } from './components/DisconnectVotePanel';
 import { WaitingRoom } from './components/WaitingRoom';
 import { RESOURCE_INFO } from './gameInfo';
@@ -85,6 +86,9 @@ function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [homeTab, setHomeTab] = useState<HomeTab>('play');
   const [showHelp, setShowHelp] = useState(false);
+  // Tarayıcının üstte açılan confirm/prompt pencereleri yerine site içi pencereler
+  const [confirmBox, setConfirmBox] = useState<{ title: string; text: string; confirmLabel: string; onConfirm: () => void } | null>(null);
+  const [vpEdit, setVpEdit] = useState<{ id: string; name: string; value: string } | null>(null);
   const [disconnectVote, setDisconnectVote] = useState<GameState['disconnectVote']>(null);
   const [endReason, setEndReason] = useState<GameState['endReason']>(undefined);
   const [myProfileData, setMyProfileData] = useState<any>(null);
@@ -93,7 +97,7 @@ function App() {
   const fetchMyProfile = async () => {
     if (!authUserId) return;
     try {
-      const res = await fetch(`${socketUrl}/api/profile/${authUserId}`);
+      const res = await fetch(`${socketUrl}/api/profile/${authUserId}`, { headers: { Authorization: `Bearer ${localStorage.getItem('cumor_token')}` } });
       const data = await res.json();
       if (data.success) {
         setMyProfileData(data.profile);
@@ -434,6 +438,37 @@ function App() {
       <ToastContainer position="top-center" theme="dark" limit={3} newestOnTop autoClose={3500} />
       <TutorialModal />
       {showHelp && <GameHelpPanel onClose={() => setShowHelp(false)} />}
+      {confirmBox && (
+        <Modal
+          title={confirmBox.title}
+          onClose={() => setConfirmBox(null)}
+          maxWidth="max-w-sm"
+          footer={
+            <div className="flex gap-2 justify-end">
+              <button className="btn btn-ghost" onClick={() => setConfirmBox(null)}>Vazgeç</button>
+              <button className="btn bg-red-600 text-white hover:bg-red-500" onClick={() => { confirmBox.onConfirm(); setConfirmBox(null); }}>{confirmBox.confirmLabel}</button>
+            </div>
+          }
+        >
+          <p className="text-slate-300">{confirmBox.text}</p>
+        </Modal>
+      )}
+      {vpEdit && (
+        <Modal
+          title={`${vpEdit.name} için VP`}
+          onClose={() => setVpEdit(null)}
+          maxWidth="max-w-sm"
+          footer={
+            <div className="flex gap-2 justify-end">
+              <button className="btn btn-ghost" onClick={() => setVpEdit(null)}>Vazgeç</button>
+              <button className="btn btn-primary" onClick={() => { socket.emit('admin_set_vp', { targetId: vpEdit.id, vp: parseInt(vpEdit.value) || 0 }); setVpEdit(null); }}>Kaydet</button>
+            </div>
+          }
+        >
+          <label htmlFor="vp-input" className="label">Yeni VP değeri</label>
+          <input id="vp-input" type="number" min={0} autoFocus value={vpEdit.value} onChange={e => setVpEdit({ ...vpEdit, value: e.target.value })} className="input" />
+        </Modal>
+      )}
       {!isInGame ? (
         <HomeHeader
           tab={homeTab}
@@ -486,7 +521,7 @@ function App() {
                   {/* Ban butonu - host görür, kendisi hariç */}
                   {myId === hostId && !isMe && (
                     <button
-                      onClick={() => { if (confirm(`${p.name} oyuncusunu odadan atmak istiyor musunuz?`)) socket.emit('ban_player', { targetId: p.id }); }}
+                      onClick={() => setConfirmBox({ title: 'Oyuncuyu at', text: `${p.name} oyuncusunu odadan atmak istiyor musun? Tekrar giremez.`, confirmLabel: 'Odadan at', onConfirm: () => socket.emit('ban_player', { targetId: p.id }) })}
                       className="text-red-500 hover:text-red-300 text-[10px] ml-0.5" title="Oyuncuyu At"
                     >
                       🚫
@@ -524,7 +559,7 @@ function App() {
             {/* Odayı Kapat Butonu (Sadece Host) */}
             {myId === hostId && (
               <button
-                onClick={() => { if (confirm("Odayı kapatmak istediğinize emin misiniz? Herkes lobiyie dönecek.")) socket.emit('close_room'); }}
+                onClick={() => setConfirmBox({ title: 'Odayı kapat', text: 'Odayı kapatmak istediğine emin misin? Herkes lobiye dönecek.', confirmLabel: 'Odayı kapat', onConfirm: () => socket.emit('close_room') })}
                 className="bg-red-900/80 hover:bg-red-800 text-white px-2 py-1 rounded text-xs border border-red-700 ml-2"
                 title="Odayı Kapat"
               >
@@ -543,7 +578,7 @@ function App() {
               <Lobby rooms={rooms} defaultName={authUsername} onCreateRoom={handleCreateRoom} onJoinRoom={handleJoinRoom} />
             )}
             {homeTab === 'profile' && (
-              <ProfilePanel socketUrl={socketUrl} userId={authUserId!} username={authUsername} isAdmin={authIsAdmin} />
+              <ProfilePanel socketUrl={socketUrl} userId={authUserId!} isAdmin={authIsAdmin} />
             )}
             {homeTab === 'store' && (
               <StorePanel
@@ -1074,10 +1109,7 @@ function App() {
                           </button>
                         </div>
                         <button
-                          onClick={() => {
-                            const vp = prompt(`${p.name} için VP değeri:`, String(p.victoryPoints));
-                            if (vp !== null) socket.emit('admin_set_vp', { targetId: p.id, vp: parseInt(vp) || 0 });
-                          }}
+                          onClick={() => setVpEdit({ id: p.id, name: p.name, value: String(p.victoryPoints) })}
                           className="bg-yellow-700 hover:bg-yellow-600 text-white px-2 py-1 rounded text-[10px] font-bold"
                           title="VP ayarla"
                         >

@@ -6,6 +6,7 @@ import { RoomManager } from './game/RoomManager.js';
 import { PlayerColor, GameStatus, COSMETICS_CATALOG } from '@cumor/shared';
 import { AuthManager } from './auth/AuthManager.js';
 import { HistoryManager } from './auth/HistoryManager.js';
+import { SocialManager } from './auth/SocialManager.js';
 
 // Supabase başlat (import sırası önemli — ilk bu çalışmalı)
 import './supabase.js';
@@ -20,6 +21,7 @@ console.log('📝 ENV PORT value:', process.env.PORT);
 
 const authManager = new AuthManager();
 const historyManager = new HistoryManager();
+const socialManager = new SocialManager();
 
 app.get('/', (req, res) => {
   res.send('Server is running! 🚀');
@@ -78,6 +80,30 @@ app.post('/api/login', rateLimit(10, 15 * 60 * 1000), async (req, res) => {
   }
 });
 
+// ŞİFREMİ UNUTTUM 1/2: kod gönder. Cevap her zaman aynı (hangi e-postaların kayıtlı olduğu öğrenilemesin)
+app.post('/api/forgot', rateLimit(5, 15 * 60 * 1000), async (req, res) => {
+  if (!process.env.BREVO_API_KEY) {
+    return res.status(503).json({ success: false, message: 'Şifre sıfırlama şu an kullanılamıyor. Lütfen bir admin ile iletişime geç.' });
+  }
+  try {
+    await authManager.requestPasswordReset(req.body?.identifier);
+  } catch (e: any) {
+    console.error('Şifre sıfırlama kodu gönderilemedi:', e?.message || e);
+  }
+  res.json({ success: true, message: 'Bu bilgilerle kayıtlı bir hesap varsa e-postasına 6 haneli kod gönderdik. Gelen kutunu (ve spam klasörünü) kontrol et.' });
+});
+
+// ŞİFREMİ UNUTTUM 2/2: kod + yeni şifre
+app.post('/api/reset-password', rateLimit(10, 15 * 60 * 1000), async (req, res) => {
+  try {
+    const { identifier, code, newPassword } = req.body || {};
+    await authManager.resetPassword(identifier, code, newPassword);
+    res.json({ success: true, message: 'Şifren değişti! Yeni şifrenle giriş yapabilirsin.' });
+  } catch (e: any) {
+    res.status(400).json({ success: false, message: e.message });
+  }
+});
+
 // ÇIKIŞ: Token'ı sunucuda da geçersiz kıl
 app.post('/api/logout', async (req, res) => {
   const token = req.header('authorization')?.replace(/^Bearer\s+/i, '');
@@ -96,26 +122,62 @@ app.post('/api/verify-email', rateLimit(10, 15 * 60 * 1000), async (req, res) =>
   }
 });
 
-// PROFİL
+// PROFİL (gizlilik kontrollü: giriş zorunlu; görülemeyen profilde sadece ad + ilişki döner)
 app.get('/api/profile/:userId', async (req, res) => {
   try {
-    const profile = await authManager.getUserProfile(req.params.userId);
-    if (!profile) return res.status(404).json({ success: false, message: 'Kullanıcı bulunamadı' });
-    res.json({ success: true, profile });
+    const viewer = await authFromHeader(req);
+    if (!viewer) return res.status(401).json({ success: false, message: 'Giriş yapmalısınız' });
+    const access = await socialManager.access(viewer.userId, req.params.userId);
+    if (!access) return res.status(404).json({ success: false, message: 'Kullanıcı bulunamadı' });
+
+    let profile = null;
+    if (access.canView) {
+      const full = await authManager.getUserProfile(req.params.userId);
+      // Sikke bakiyesi sadece sahibine görünür
+      profile = full && access.relation !== 'self' ? { ...full, sikke: undefined } : full;
+    }
+    res.json({ success: true, access, profile });
   } catch (e: any) {
-    res.status(500).json({ success: false, message: e.message });
+    res.status(400).json({ success: false, message: e.message });
   }
 });
 
-// OYUN GEÇMİŞİ
+// OYUN GEÇMİŞİ (profille aynı gizlilik kuralı)
 app.get('/api/history/:userId', async (req, res) => {
   try {
+    const viewer = await authFromHeader(req);
+    if (!viewer) return res.status(401).json({ success: false, message: 'Giriş yapmalısınız' });
+    const access = await socialManager.access(viewer.userId, req.params.userId);
+    if (!access) return res.status(404).json({ success: false, message: 'Kullanıcı bulunamadı' });
+    if (!access.canView) return res.status(403).json({ success: false, message: 'Bu profil gizli' });
     const history = await historyManager.getUserHistory(req.params.userId);
     res.json({ success: true, history });
   } catch (e: any) {
     res.status(500).json({ success: false, message: e.message });
   }
 });
+
+// ======== SOSYAL: OYUNCU ARAMA, ARKADAŞLIK, GİZLİLİK ========
+// Hepsi giriş ister; route'lar aynı kalıbı kullanır
+const social = (handler: (userId: string, req: Request) => Promise<any>) => async (req: Request, res: Response) => {
+  try {
+    const me = await authFromHeader(req);
+    if (!me) return res.status(401).json({ success: false, message: 'Giriş yapmalısınız' });
+    res.json({ success: true, ...(await handler(me.userId, req)) });
+  } catch (e: any) {
+    res.status(400).json({ success: false, message: e.message });
+  }
+};
+
+app.get('/api/users/search', social(async (_me, req) => ({ users: await socialManager.searchUsers(String(req.query.q || '')) })));
+app.get('/api/friends', social(async me => socialManager.list(me)));
+app.post('/api/friends/request', social(async (me, req) => ({ message: await socialManager.sendRequest(me, req.body?.userId) })));
+app.post('/api/friends/respond', social(async (me, req) => ({ message: await socialManager.respond(me, req.body?.userId, req.body?.accept === true) })));
+app.post('/api/friends/remove', social(async (me, req) => ({ message: await socialManager.remove(me, req.body?.userId) })));
+app.post('/api/profile/visibility', social(async (me, req) => {
+  await socialManager.setVisibility(me, req.body?.visibility);
+  return { message: 'Profil görünürlüğü güncellendi.' };
+}));
 
 // ADMİN YAP/KALDIR
 app.post('/api/set-admin', async (req, res) => {

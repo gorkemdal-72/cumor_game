@@ -1,6 +1,41 @@
 import { supabase } from '../supabase.js';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
+import { createHash, randomInt, timingSafeEqual } from 'crypto';
+
+const RESET_CODE_TTL_MS = 15 * 60 * 1000;   // Sıfırlama kodu 15 dk geçerli
+const RESET_RESEND_COOLDOWN_MS = 60 * 1000; // Aynı hesaba en fazla dakikada bir kod
+const RESET_MAX_ATTEMPTS = 5;               // 5 yanlış denemede kod geçersiz olur
+
+const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+const escapeHtml = (s: string) => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
+
+// Şifre kuralı: kayıt ve şifre sıfırlama aynı kuralı kullanır
+function assertStrongPassword(password: unknown): asserts password is string {
+  if (typeof password !== 'string' || password.length < 8) throw new Error('Şifre en az 8 karakter olmalı!');
+  if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) throw new Error('Şifre en az bir harf ve bir rakam içermelidir!');
+}
+
+// Brevo ile e-posta gönder; gönderilemezse hata fırlatır (sessizce "gönderildi" demesin)
+async function sendEmail(to: string, name: string, subject: string, htmlContent: string) {
+  const apiKey = process.env.BREVO_API_KEY;
+  if (!apiKey) throw new Error('E-posta servisi yapılandırılmamış (BREVO_API_KEY yok).');
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: { 'Accept': 'application/json', 'Content-Type': 'application/json', 'api-key': apiKey },
+    body: JSON.stringify({ sender: { name: 'CUMOR', email: 'gorkemdal.72@gmail.com' }, to: [{ email: to, name }], subject, htmlContent }),
+  });
+  if (!res.ok) throw new Error(`Brevo ${res.status}: ${await res.text()}`);
+}
+
+// 6 haneli kodu öne çıkaran ortak e-posta şablonu
+const codeEmail = (title: string, intro: string, code: string, footer: string) => `
+  <div style="font-family: sans-serif; text-align: center; padding: 20px;">
+    <h2>${title}</h2>
+    <p>${intro}</p>
+    <div style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #b45309; padding: 20px; background: #fffbeb; display: inline-block; border-radius: 8px; margin: 15px 0;">${code}</div>
+    <p style="margin-top: 20px; font-size: 12px; color: #666;">${footer}</p>
+  </div>`;
 
 export interface UserProfile {
   id: string;
@@ -27,10 +62,7 @@ export class AuthManager {
     if (!/^[\p{L}\p{N}_]{2,20}$/u.test(trimmed)) throw new Error('Kullanıcı adı 2-20 karakter olmalı ve sadece harf, rakam veya _ içermeli!');
     
     // Şifre gücü kontrolü: En az 8 karakter, harf ve rakam içermeli
-    if (!password || password.length < 8) throw new Error('Şifre en az 8 karakter olmalı!');
-    if (!/[A-Za-z]/.test(password) || !/[0-9]/.test(password)) {
-        throw new Error('Şifre en az bir harf ve bir rakam içermelidir!');
-    }
+    assertStrongPassword(password);
     // E-posta format kontrolü (düzgün regex ile)
     const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
     if (!email || !emailRegex.test(email.trim())) {
@@ -54,8 +86,8 @@ export class AuthManager {
 
     const passwordHash = await bcrypt.hash(password, 10);
     
-    // 6 HANELİ DOĞRULAMA KODU OLUŞTUR
-    const verificationCode = Math.floor(100000 + Math.random() * 900000).toString();
+    // 6 HANELİ DOĞRULAMA KODU OLUŞTUR (kriptografik rastgele)
+    const verificationCode = randomInt(100000, 1000000).toString();
 
     // Profile ekle (is_verified: false ve verification_token ile)
     const { data: newUser, error: insertError } = await supabase
@@ -85,39 +117,17 @@ export class AuthManager {
     // Brevo ile E-posta Gönderme (6 Haneli Kod)
     // Doğrulama kapalıyken mail atma: işe yaramıyor ve herkes başka birinin adresine bizim adımıza mail attırabiliyordu
     const EMAIL_VERIFICATION_ENABLED = false; // Doğrulamayı açınca true yap (yukarıdaki is_verified satırlarıyla birlikte)
-    const brevoApiKey = process.env.BREVO_API_KEY;
-
-    if (EMAIL_VERIFICATION_ENABLED && brevoApiKey) {
+    if (EMAIL_VERIFICATION_ENABLED) {
         try {
-            await fetch('https://api.brevo.com/v3/smtp/email', {
-                method: 'POST',
-                headers: {
-                    'Accept': 'application/json',
-                    'Content-Type': 'application/json',
-                    'api-key': brevoApiKey
-                },
-                body: JSON.stringify({
-                    sender: { name: "CUMOR", email: "gorkemdal.72@gmail.com" },
-                    to: [{ email: email.toLowerCase(), name: trimmed }],
-                    subject: "CUMOR - E-Posta Doğrulama Kodunuz",
-                    htmlContent: `
-                        <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-                            <h2>CUMOR'a Hoş Geldin, ${trimmed}!</h2>
-                            <p>Kayıt işlemini tamamlamak için aşağıdaki 6 haneli doğrulama kodunu kullanabilirsin:</p>
-                            <div style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #3b82f6; padding: 20px; background: #f0f8ff; display: inline-block; border-radius: 8px; margin: 15px 0;">
-                                ${verificationCode}
-                            </div>
-                            <p style="margin-top: 20px; font-size: 12px; color: #666;">Eğer bu kaydı sen yapmadıysan bu e-postayı dikkate alma.</p>
-                        </div>
-                    `
-                })
-            });
+            await sendEmail(email.toLowerCase(), trimmed, 'CUMOR - E-Posta Doğrulama Kodunuz', codeEmail(
+                `CUMOR'a Hoş Geldin, ${escapeHtml(trimmed)}!`,
+                'Kayıt işlemini tamamlamak için aşağıdaki 6 haneli doğrulama kodunu kullanabilirsin:',
+                verificationCode,
+                'Eğer bu kaydı sen yapmadıysan bu e-postayı dikkate alma.'));
             console.log(`📧 Doğrulama kodu maili gönderildi: ${email}`);
         } catch (err) {
             console.error("Brevo Mail Gönderme Hatası:", err);
         }
-    } else if (EMAIL_VERIFICATION_ENABLED) {
-        console.warn("⚠️ BREVO_API_KEY bulunamadı. E-posta gönderilemedi.");
     }
 
     console.log(`✅ Kayıt: ${trimmed} (admin: ${isFirstUser})`);
@@ -196,6 +206,76 @@ export class AuthManager {
       return true;
   }
   
+  private async findByIdentifier(identifier: unknown) {
+    if (typeof identifier !== 'string' || !identifier.trim()) throw new Error('E-posta veya kullanıcı adı gerekli.');
+    const key = identifier.trim().toLowerCase();
+    const { data, error } = await supabase
+        .from('profiles')
+        .select('id, email, username, display_name, reset_code_hash, reset_expires_at, reset_attempts')
+        .eq(key.includes('@') ? 'email' : 'username', key)
+        .maybeSingle();
+    if (error) throw new Error('Sıfırlama şu an yapılamıyor.');
+    return data;
+  }
+
+  // ŞİFREMİ UNUTTUM 1/2: hesabın e-postasına 6 haneli kod gönder.
+  // Hesap yoksa da aynı cevap döner (kayıtlı e-postalar öğrenilemesin); çağıran yer her durumda aynı mesajı gösterir.
+  async requestPasswordReset(identifier: unknown): Promise<void> {
+    const user = await this.findByIdentifier(identifier);
+    if (!user) return;
+
+    // Yeni kod çok sık istenmesin (mail kutusunu doldurma / Brevo kotası)
+    const sentAt = user.reset_expires_at ? new Date(user.reset_expires_at).getTime() - RESET_CODE_TTL_MS : 0;
+    if (Date.now() - sentAt < RESET_RESEND_COOLDOWN_MS) return;
+
+    const code = randomInt(100000, 1000000).toString();
+    const { error } = await supabase.from('profiles').update({
+        reset_code_hash: sha256(code),
+        reset_expires_at: new Date(Date.now() + RESET_CODE_TTL_MS).toISOString(),
+        reset_attempts: 0,
+    }).eq('id', user.id);
+    if (error) throw new Error('Sıfırlama şu an yapılamıyor.');
+
+    const name = user.display_name || user.username;
+    await sendEmail(user.email, name, 'CUMOR - Şifre Sıfırlama Kodun', codeEmail(
+        `Merhaba ${escapeHtml(name)},`,
+        'Şifreni sıfırlamak için aşağıdaki 6 haneli kodu kullan. Kod 15 dakika geçerli.',
+        code,
+        'Bu isteği sen yapmadıysan bu e-postayı dikkate alma; şifren değişmez.'));
+    console.log(`📧 Şifre sıfırlama kodu gönderildi: ${user.id}`);
+  }
+
+  // ŞİFREMİ UNUTTUM 2/2: kod doğruysa yeni şifreyi kaydet ve tüm oturumları kapat
+  async resetPassword(identifier: unknown, code: unknown, newPassword: unknown): Promise<void> {
+    const invalid = 'Kod hatalı veya süresi dolmuş. Yeni kod isteyebilirsin.';
+    assertStrongPassword(newPassword);
+    if (typeof code !== 'string' || !/^\d{6}$/.test(code.trim())) throw new Error(invalid);
+
+    const user = await this.findByIdentifier(identifier);
+    if (!user || !user.reset_code_hash || !user.reset_expires_at) throw new Error(invalid);
+    if (new Date(user.reset_expires_at).getTime() < Date.now() || (user.reset_attempts || 0) >= RESET_MAX_ATTEMPTS) throw new Error(invalid);
+
+    const ok = timingSafeEqual(Buffer.from(sha256(code.trim())), Buffer.from(user.reset_code_hash));
+    if (!ok) {
+        const attempts = (user.reset_attempts || 0) + 1;
+        await supabase.from('profiles').update({ reset_attempts: attempts }).eq('id', user.id);
+        const left = RESET_MAX_ATTEMPTS - attempts;
+        throw new Error(left > 0 ? `Kod hatalı. ${left} deneme hakkın kaldı.` : invalid);
+    }
+
+    const { error } = await supabase.from('profiles').update({
+        password_hash: await bcrypt.hash(newPassword, 10),
+        reset_code_hash: null,
+        reset_expires_at: null,
+        reset_attempts: 0,
+    }).eq('id', user.id);
+    if (error) throw new Error('Şifre güncellenemedi.');
+
+    // Şifre değişti: çalınmış olabilecek eski oturumlar dahil hepsini kapat
+    await supabase.from('sessions').delete().eq('user_id', user.id);
+    console.log(`🔑 Şifre sıfırlandı: ${user.id}`);
+  }
+
   // TOKEN DOĞRULAMA: Token geçerli mi kontrol et (30 günden eski oturumlar geçersiz)
   async verifyToken(token: string): Promise<{ userId: string; isAdmin: boolean } | null> {
     // sessions.token UUID kolonu: UUID olmayan değer Postgres hatası verir, baştan ele

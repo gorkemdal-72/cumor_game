@@ -115,7 +115,7 @@ export function StorePanel({ socketUrl, userId, token, sikke, isAdmin = false, e
                 ) : (
                   <button onClick={() => setConfirmItem(item)} disabled={!canAfford || busy} className="btn btn-primary w-full"
                     title={canAfford ? undefined : `${item.price - sikke} sikke daha gerekiyor`}>
-                    {isAdmin ? 'Ücretsiz al (Admin)' : canAfford ? `Satın al · ${item.price} 💰` : `${item.price} 💰 · ${item.price - sikke} eksik`}
+                    {canAfford ? `Satın al · ${item.price} 💰` : `${item.price} 💰 · ${item.price - sikke} eksik`}
                   </button>
                 )}
               </article>
@@ -137,9 +137,9 @@ export function StorePanel({ socketUrl, userId, token, sikke, isAdmin = false, e
           }
         >
           <p className="text-slate-300">
-            <strong className="text-white">{confirmItem.name}</strong> tasarımını <strong className="text-amber-300">{isAdmin ? 'ücretsiz (admin)' : `${confirmItem.price} sikke`}</strong> olarak almak istiyor musun?
+            <strong className="text-white">{confirmItem.name}</strong> tasarımını <strong className="text-amber-300">{confirmItem.price} sikke</strong> karşılığında almak istiyor musun?
           </p>
-          {!isAdmin && <p className="text-sm text-slate-500 mt-2">Kalan bakiye: {sikke - confirmItem.price} sikke</p>}
+          <p className="text-sm text-slate-500 mt-2">Kalan bakiye: {isAdmin ? '∞ (Admin — sikke sınırsız)' : `${sikke - confirmItem.price} sikke`}</p>
         </Modal>
       )}
     </div>
