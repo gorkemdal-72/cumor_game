@@ -19,6 +19,7 @@ import { GameHelpPanel } from './components/GameHelpPanel';
 import { Modal } from './components/Modal';
 import { DisconnectVotePanel } from './components/DisconnectVotePanel';
 import { WaitingRoom } from './components/WaitingRoom';
+import { Avatar } from './components/Avatar';
 import { RESOURCE_INFO } from './gameInfo';
 
 // Zar sonrası "ne kazandın/kaybettin" bildirimi için: zar sonucu gelir, ardından gelen durum güncellemesinde farka bakılır
@@ -511,7 +512,7 @@ function App() {
                     } ${isMe ? 'ring-1 ring-cyan-500/50' : ''}`}
                   title={`${p.name} - ${p.victoryPoints} VP${p.disconnected ? ' (bağlantısı koptu)' : ''}`}
                 >
-                  <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: p.color }} />
+                  <Avatar avatar={p.equippedAvatar} color={p.color} size={22} />
                   <span className={`font-semibold truncate max-w-[60px] ${p.disconnected ? 'line-through opacity-60' : ''}`}>{p.name}</span>
                   {p.disconnected && <span title="Bağlantısı koptu" aria-label="Bağlantısı koptu">🔌</span>}
                   <span className="text-yellow-400 font-bold">{p.victoryPoints}</span>
@@ -588,6 +589,7 @@ function App() {
                 sikke={myProfileData?.sikke ?? 0}
                 isAdmin={authIsAdmin}
                 equippedBuilding={myProfileData?.equippedBuilding || 'default'}
+                equippedAvatar={myProfileData?.equippedAvatar || 'default'}
                 onUpdate={fetchMyProfile}
               />
             )}

@@ -19,7 +19,7 @@ export const STATUS_LABELS: Record<string, { label: string; className: string }>
   [GameStatus.FINISHED]: { label: 'Bitti', className: 'bg-slate-500/20 text-slate-400' },
 };
 
-const COLOR_NAMES: Record<string, string> = {
+export const COLOR_NAMES: Record<string, string> = {
   RED: 'Kırmızı', BLUE: 'Mavi', ORANGE: 'Turuncu', WHITE: 'Beyaz',
   GREEN: 'Yeşil', PURPLE: 'Mor', PINK: 'Pembe', CYAN: 'Turkuaz',
 };

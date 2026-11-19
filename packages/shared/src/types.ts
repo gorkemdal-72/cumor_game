@@ -51,6 +51,7 @@ export interface Player {
     tradesMade: number;
   };
   equippedBuilding?: string; // Sikke sistemi ile alınan bina tasarımı
+  equippedAvatar?: string;
   disconnected?: boolean;    // Oyun sırasında bağlantısı koptu (geri dönmesi bekleniyor)
 }
 
@@ -158,6 +159,7 @@ export interface UserAccount {
   createdAt: number;
   sikke: number;
   equippedBuilding: string;
+  equippedAvatar: string;
   awardGaddar?: number;
   awardSanssiz?: number;
   awardBorsa?: number;

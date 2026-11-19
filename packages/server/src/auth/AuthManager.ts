@@ -18,7 +18,7 @@ function assertStrongPassword(password: unknown): asserts password is string {
 
 // Brevo ile e-posta gönder; gönderilemezse hata fırlatır (sessizce "gönderildi" demesin)
 async function sendEmail(to: string, name: string, subject: string, htmlContent: string) {
-  const apiKey = process.env.BREVO_API_KEY;
+  const apiKey = process.env.BREVO_API_KEY?.trim(); // Panele yapıştırırken gelen boşluk/satır sonu "Key not found" yaptırmasın
   if (!apiKey) throw new Error('E-posta servisi yapılandırılmamış (BREVO_API_KEY yok).');
   const res = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
@@ -48,6 +48,7 @@ export interface UserProfile {
   createdAt: number;
   sikke: number;
   equippedBuilding: string;
+  equippedAvatar: string;
   awardGaddar?: number;
   awardSanssiz?: number;
   awardBorsa?: number;
@@ -325,6 +326,7 @@ export class AuthManager {
       createdAt: new Date(d.created_at).getTime(),
       sikke: d.sikke || 0,
       equippedBuilding: d.equipped_building || 'default',
+      equippedAvatar: d.equipped_avatar || 'default',
       awardGaddar: d.award_gaddar || 0,
       awardSanssiz: d.award_sanssiz || 0,
       awardBorsa: d.award_borsa || 0
@@ -370,7 +372,8 @@ export class AuthManager {
         totalPlaytimeMinutes: d.total_playtime_minutes || 0,
         createdAt: new Date(d.created_at).getTime(),
         sikke: d.sikke || 0,
-        equippedBuilding: d.equipped_building || 'default'
+        equippedBuilding: d.equipped_building || 'default',
+        equippedAvatar: d.equipped_avatar || 'default'
     }));
   }
 

@@ -260,8 +260,11 @@ app.post('/api/user/equip', async (req, res) => {
        if (!existing) throw new Error("Bu eşyaya sahip değilsiniz!");
     }
 
-    if (type === 'building') {
-       const { error } = await supabase.from('profiles').update({ equipped_building: cosmeticId }).eq('id', auth.userId);
+    // Tür katalogdan doğrulanır (istemcinin gönderdiği type'a güvenme)
+    if (!COSMETICS_CATALOG.some(c => c.id === cosmeticId && c.type === type)) throw new Error("Eşya bulunamadı");
+    const column = type === 'building' ? 'equipped_building' : type === 'avatar' ? 'equipped_avatar' : null;
+    if (column) {
+       const { error } = await supabase.from('profiles').update({ [column]: cosmeticId }).eq('id', auth.userId);
        if (error) throw new Error("Kuşanma başarısız!");
     }
 
@@ -452,13 +455,13 @@ io.on('connection', (socket) => {
       const roomId = Math.random().toString(36).substr(2, 9);
       const newRoom = new RoomManager(roomId, data.roomName, data.password);
       
-      let equippedBuilding = 'default';
+      let equippedBuilding = 'default', equippedAvatar = 'default';
       if (authInfo?.userId) {
           const profile = await authManager.getUserProfile(authInfo.userId);
-          if (profile) equippedBuilding = profile.equippedBuilding;
+          if (profile) ({ equippedBuilding, equippedAvatar } = profile);
       }
 
-      newRoom.addPlayer(socket.id, data.playerName, data.playerColor, authInfo?.userId, equippedBuilding);
+      newRoom.addPlayer(socket.id, data.playerName, data.playerColor, authInfo?.userId, equippedBuilding, equippedAvatar);
       rooms.set(roomId, newRoom);
       playerRoomMap.set(socket.id, roomId);
       socket.join(roomId);
@@ -495,13 +498,13 @@ io.on('connection', (socket) => {
       if (room.password && room.password !== data.password) throw new Error("Yanlış şifre!");
 
       // Normal Join
-      let equippedBuilding = 'default';
+      let equippedBuilding = 'default', equippedAvatar = 'default';
       if (authInfo?.userId) {
           const profile = await authManager.getUserProfile(authInfo.userId);
-          if (profile) equippedBuilding = profile.equippedBuilding;
+          if (profile) ({ equippedBuilding, equippedAvatar } = profile);
       }
 
-      room.addPlayer(socket.id, data.playerName, data.playerColor, authInfo?.userId, equippedBuilding);
+      room.addPlayer(socket.id, data.playerName, data.playerColor, authInfo?.userId, equippedBuilding, equippedAvatar);
       playerRoomMap.set(socket.id, data.roomId);
       socket.join(data.roomId);
       socket.emit('join_success');

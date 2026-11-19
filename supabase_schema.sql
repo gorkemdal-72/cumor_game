@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     total_playtime_minutes INTEGER DEFAULT 0,
     sikke INTEGER DEFAULT 0,
     equipped_building TEXT DEFAULT 'default',
+    equipped_avatar TEXT DEFAULT 'default',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 

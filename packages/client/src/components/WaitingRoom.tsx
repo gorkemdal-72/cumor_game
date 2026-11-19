@@ -1,4 +1,5 @@
 import type { Player } from '@cumor/shared';
+import { Avatar } from './Avatar';
 
 const MIN_PLAYERS = 3;
 const MAX_PLAYERS = 5;
@@ -35,7 +36,7 @@ export function WaitingRoom({ players, myId, hostId, onStart, onLeave }: Props) 
         <ul className="space-y-2 mb-5">
           {players.map(p => (
             <li key={p.id} className="flex items-center gap-3 bg-slate-900/60 border border-slate-700/60 rounded-xl px-3 py-2.5">
-              <span className="w-4 h-4 rounded-full border border-white/30" style={{ backgroundColor: p.color }} aria-hidden />
+              <Avatar avatar={p.equippedAvatar} color={p.color} size={36} />
               <span className="flex-1 font-semibold text-white truncate">
                 {p.name}{p.id === myId && <span className="text-slate-400 font-normal"> (sen)</span>}
               </span>

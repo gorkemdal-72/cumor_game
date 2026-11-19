@@ -163,7 +163,7 @@ export class RoomManager {
 
   // OYUNCU EKLEME: Lobide yeni oyuncu odaya katılır
   // Maksimum 5 kişi (5 kişide büyük harita oluşturulacak)
-  addPlayer(id: string, name: string, color: PlayerColor, userId?: string, equippedBuilding: string = 'default') {
+  addPlayer(id: string, name: string, color: PlayerColor, userId?: string, equippedBuilding: string = 'default', equippedAvatar: string = 'default') {
     if (this.room.status !== GameStatus.LOBBY) throw new Error("Oyun başladı, giriş yapılamaz!");
     if (this.room.players.length >= 5) throw new Error("Oda dolu! (Maks 5 kişi)");
     name = typeof name === 'string' ? name.trim().slice(0, 20) : '';
@@ -191,7 +191,8 @@ export class RoomManager {
       newDevCards: { ...emptyCardHand },
       victoryPoints: 0, longestRoad: 0, armySize: 0,
       gameStats: { sabotagesUsed: 0, robbedByTaxCollector: 0, tradesMade: 0 },
-      equippedBuilding
+      equippedBuilding,
+      equippedAvatar
     });
     if (!this.room.hostId) this.room.hostId = id;
   }
