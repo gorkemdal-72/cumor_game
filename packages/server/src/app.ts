@@ -232,7 +232,7 @@ app.post('/api/store/buy', async (req, res) => {
     const item = COSMETICS_CATALOG.find(c => c.id === cosmeticId);
     if (!item) throw new Error("Eşya bulunamadı");
 
-    if (item.id === 'default') throw new Error("Varsayılan eşya satın alınamaz.");
+    if (item.price === 0) throw new Error("Ücretsiz eşya satın alınamaz.");
 
     // Bakiye kontrolü + düşme + eşya ekleme tek transaction'da (supabase_security.sql → buy_cosmetic)
     const { error: buyError } = await supabase.rpc('buy_cosmetic', {
@@ -255,17 +255,22 @@ app.post('/api/user/equip', async (req, res) => {
     const auth = await authManager.verifyToken(token);
     if (!auth) return res.status(401).json({ success: false, message: 'Geçersiz token' });
 
-    if (cosmeticId !== 'default') {
+    // Tür katalogdan doğrulanır (istemcinin gönderdiği type'a güvenme)
+    const item = COSMETICS_CATALOG.find(c => c.id === cosmeticId && c.type === type);
+    if (!item) throw new Error("Eşya bulunamadı");
+    if (item.price > 0) {
        const { data: existing } = await supabase.from('user_cosmetics').select('id').eq('user_id', auth.userId).eq('cosmetic_id', cosmeticId).maybeSingle();
        if (!existing) throw new Error("Bu eşyaya sahip değilsiniz!");
     }
 
-    // Tür katalogdan doğrulanır (istemcinin gönderdiği type'a güvenme)
-    if (!COSMETICS_CATALOG.some(c => c.id === cosmeticId && c.type === type)) throw new Error("Eşya bulunamadı");
     const column = type === 'building' ? 'equipped_building' : type === 'avatar' ? 'equipped_avatar' : null;
     if (column) {
        const { error } = await supabase.from('profiles').update({ [column]: cosmeticId }).eq('id', auth.userId);
-       if (error) throw new Error("Kuşanma başarısız!");
+       if (error) {
+         console.error('equip:', error.message);
+         // Sütun yoksa migration çalıştırılmamıştır (supabase_avatars.sql)
+         throw new Error(error.message.includes(column) ? `Veritabanında ${column} sütunu yok (yönetici supabase_avatars.sql çalıştırmalı).` : "Kuşanma başarısız!");
+       }
     }
 
     res.json({ success: true, message: 'Tasarım kuşanıldı!' });

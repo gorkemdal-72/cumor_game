@@ -107,7 +107,7 @@ export function StorePanel({ socketUrl, userId, token, sikke, isAdmin = false, e
           <h2 className="text-lg font-black text-white mb-3">{type === 'building' ? 'Bina Tasarımları' : 'Avatarlar'}</h2>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {COSMETICS_CATALOG.filter(c => c.type === type).map(item => {
-              const isOwned = item.id === 'default' || ownedIds.includes(item.id);
+              const isOwned = item.price === 0 || ownedIds.includes(item.id);
               const isEquipped = (type === 'building' ? equippedBuilding : equippedAvatar) === item.id;
               const canAfford = isAdmin || sikke >= item.price;
 
